@@ -204,6 +204,26 @@ structured plan and passes through the same validator. `ADB_NL_MODEL` overrides 
 `GET /healthz` reports which translator is active. If the model is unreachable, the engine
 falls back to the rules and says so in the response warnings.
 
+## Stopping the server
+
+`SIGINT` (Ctrl-C) or `SIGTERM` (what Docker, Kubernetes and systemd send) starts a graceful
+stop:
+
+1. HTTP stops accepting new connections and in-flight requests get up to 10 seconds to
+   finish. After that the process exits anyway, so one stuck client cannot keep it alive.
+2. The stdio transport stops between requests.
+3. Every table's memtable is flushed into a segment, so a restart replays a short
+   write-ahead log instead of the whole thing.
+
+A second signal exits immediately with code 130, skipping the drain.
+
+Closing stdin also stops the process, which is what happens when an MCP client that launched
+it exits. In `--transport both`, that stops the HTTP transport too rather than leaving an
+orphan serving.
+
+No data is at risk either way. Every acknowledged write is already fsynced to the log, so
+even `kill -9` loses nothing; a hard kill just makes the next start replay more of the log.
+
 ## Operating notes
 
 * **One process per data directory.** The WAL is single-writer, enforced by an advisory lock

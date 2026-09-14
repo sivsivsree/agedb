@@ -544,6 +544,30 @@ impl Engine {
         self.table(ctx, name)?.compact()
     }
 
+    /// Flush every open table's memtable and checkpoint it.
+    ///
+    /// This is a lifecycle operation rather than a request, so it takes no
+    /// [`RequestContext`]: it runs on shutdown, across every tenant. Nothing is
+    /// at risk if it is skipped, because the write-ahead log is the source of
+    /// truth, but checkpointing means a restart replays a short log instead of
+    /// the whole thing.
+    ///
+    /// A failure on one table is logged and the rest still flush: a shutdown
+    /// that gives up halfway is worse than one that does what it can.
+    pub fn checkpoint(&self) -> Result<usize> {
+        let mut segments = 0;
+        for ((tenant, database, table), store) in self.read_tables()?.iter() {
+            match store.flush() {
+                Ok(created) => segments += created,
+                Err(error) => tracing::error!(
+                    %tenant, %database, %table, %error,
+                    "could not flush this table during checkpoint"
+                ),
+            }
+        }
+        Ok(segments)
+    }
+
     // --- queries ---------------------------------------------------------
 
     /// Translation context for the current database.

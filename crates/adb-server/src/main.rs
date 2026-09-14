@@ -12,6 +12,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use adb_core::{AdbError, DatabaseName, QueryLimits, Result, Scope, TenantId};
 use adb_engine::{Engine, EngineConfig, QuerySource};
@@ -19,6 +20,7 @@ use adb_mcp::{ApiKey, AuthRegistry, McpServer};
 use adb_storage::table::StorageConfig;
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Deserialize;
+use tokio::sync::watch;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -263,14 +265,27 @@ fn open_engine(cli: &Cli) -> Result<Arc<Engine>> {
 async fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
     init_logging(&cli.log, cli.log_json);
-    match run(cli).await {
-        Ok(()) => std::process::ExitCode::SUCCESS,
+    let code = match run(cli).await {
+        Ok(()) => 0,
         Err(error) => {
             tracing::error!(code = error.code(), %error, "fatal");
             eprintln!("error: {error}");
-            std::process::ExitCode::FAILURE
+            1
         }
-    }
+    };
+
+    // Exit explicitly rather than returning and letting the runtime drop.
+    //
+    // The stdio transport parks a blocking thread on a read from stdin, and no
+    // signal can interrupt a blocking read. Dropping a tokio runtime waits for
+    // its blocking tasks to finish, so returning here would hang forever on a
+    // read that will never return.
+    //
+    // This is safe because the graceful work has already happened by this
+    // point: HTTP has stopped accepting and drained, memtables are flushed, and
+    // every WAL append was fsynced when it was acknowledged. The kernel
+    // releases the data directory lock as the process exits.
+    std::process::exit(code)
 }
 
 async fn run(cli: Cli) -> Result<()> {
@@ -374,6 +389,11 @@ async fn run(cli: Cli) -> Result<()> {
     }
 }
 
+/// How long in-flight HTTP requests get to finish before the process exits
+/// anyway. Without a bound, one client that never closes its connection would
+/// keep the server alive indefinitely.
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+
 async fn serve(
     engine: Arc<Engine>,
     auth: AuthRegistry,
@@ -381,7 +401,9 @@ async fn serve(
     bind: String,
     port: u16,
 ) -> Result<()> {
-    let mcp = Arc::new(McpServer::new(engine.clone(), auth.clone()));
+    // One shutdown signal, watched by every transport.
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    listen_for_signals(shutdown_tx.clone());
 
     let http = if matches!(transport, Transport::Http | Transport::Both) {
         if auth.is_empty() {
@@ -391,30 +413,126 @@ async fn serve(
         }
         let state = adb_api::AppState::new(engine.clone(), auth.clone());
         tracing::info!(keys = auth.key_count(), "HTTP transport enabled");
+        let stopping = shutdown_rx.clone();
         Some(tokio::spawn(async move {
-            adb_api::serve_http(&bind, port, state, shutdown_signal()).await
+            adb_api::serve_http(&bind, port, state, stopping_signal(stopping)).await
         }))
     } else {
         None
     };
 
+    let mut outcome = Ok(());
+
     if matches!(transport, Transport::Stdio | Transport::Both) {
-        let mcp = mcp.clone();
-        // The stdio loop blocks on reads, so it owns a thread.
-        tokio::task::spawn_blocking(move || adb_mcp::serve_stdio(mcp))
-            .await
-            .map_err(|e| AdbError::internal(format!("stdio task failed: {e}")))??;
-        return Ok(());
+        let mcp = Arc::new(McpServer::new(engine.clone(), auth.clone()));
+        let stdio = tokio::task::spawn_blocking(move || adb_mcp::serve_stdio(mcp));
+
+        // The stdio loop blocks on reading stdin, and no signal can interrupt a
+        // blocking read. So it is raced against the shutdown signal rather than
+        // awaited: on a signal we stop waiting for it and let process exit take
+        // the parked thread with it. There is nothing to drain, because a tool
+        // call is handled synchronously before the next line is read.
+        tokio::select! {
+            finished = stdio => {
+                outcome = match finished {
+                    Ok(result) => result,
+                    Err(error) => Err(AdbError::internal(format!("stdio task failed: {error}"))),
+                };
+                // stdin closed, so the client that launched this process is
+                // gone. Stop the HTTP transport too rather than lingering.
+                let _ = shutdown_tx.send(true);
+            }
+            _ = stopping_signal(shutdown_rx.clone()) => {
+                tracing::info!("stopping the stdio transport");
+            }
+        }
     }
 
     if let Some(http) = http {
-        http.await
-            .map_err(|e| AdbError::internal(format!("http task failed: {e}")))??;
+        // Wait for the stop signal without a deadline, then give in-flight
+        // requests a bounded window to finish.
+        stopping_signal(shutdown_rx.clone()).await;
+        match tokio::time::timeout(DRAIN_TIMEOUT, http).await {
+            Ok(Ok(result)) => {
+                if outcome.is_ok() {
+                    outcome = result;
+                }
+            }
+            Ok(Err(error)) => tracing::error!(%error, "http task failed"),
+            Err(_) => tracing::warn!(
+                seconds = DRAIN_TIMEOUT.as_secs(),
+                "in-flight requests did not finish in time, exiting anyway"
+            ),
+        }
     }
-    Ok(())
+
+    checkpoint(&engine);
+    outcome
 }
 
-async fn shutdown_signal() {
+/// Flush memtables on the way out, so a restart replays a short log rather than
+/// the whole thing. Never fatal: the log already holds everything.
+fn checkpoint(engine: &Engine) {
+    match engine.checkpoint() {
+        Ok(0) => tracing::info!("stopped"),
+        Ok(segments) => tracing::info!(segments, "stopped, memtables flushed"),
+        Err(error) => tracing::error!(
+            %error,
+            "could not checkpoint on shutdown, so the write-ahead log will be replayed on restart"
+        ),
+    }
+}
+
+/// Resolves once the process has been asked to stop.
+async fn stopping_signal(mut stopping: watch::Receiver<bool>) {
+    if *stopping.borrow() {
+        return;
+    }
+    let _ = stopping.changed().await;
+}
+
+/// Ask every transport to stop on the first signal, and exit immediately on the
+/// second: an operator who signals twice is not willing to wait.
+fn listen_for_signals(shutdown: watch::Sender<bool>) {
+    tokio::spawn(async move {
+        next_signal().await;
+        tracing::info!("shutting down, waiting for in-flight work");
+        let _ = shutdown.send(true);
+
+        next_signal().await;
+        tracing::warn!("second signal, exiting now");
+        std::process::exit(130);
+    });
+}
+
+/// SIGINT or SIGTERM. SIGTERM matters as much as Ctrl-C, because that is what
+/// Docker, Kubernetes and systemd send.
+#[cfg(unix)]
+async fn next_signal() {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let mut interrupt = match signal(SignalKind::interrupt()) {
+        Ok(stream) => stream,
+        Err(error) => {
+            tracing::warn!(%error, "cannot listen for SIGINT");
+            return std::future::pending().await;
+        }
+    };
+    let mut terminate = match signal(SignalKind::terminate()) {
+        Ok(stream) => stream,
+        Err(error) => {
+            tracing::warn!(%error, "cannot listen for SIGTERM, only Ctrl-C will stop this process");
+            interrupt.recv().await;
+            return;
+        }
+    };
+    tokio::select! {
+        _ = interrupt.recv() => {}
+        _ = terminate.recv() => {}
+    }
+}
+
+#[cfg(not(unix))]
+async fn next_signal() {
     let _ = tokio::signal::ctrl_c().await;
-    tracing::info!("shutting down");
 }
