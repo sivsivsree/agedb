@@ -1,5 +1,9 @@
 # agedb
 
+[![CI](https://github.com/sivsivsree/agedb/actions/workflows/ci.yml/badge.svg)](https://github.com/sivsivsree/agedb/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.90%2B-orange.svg)](https://rustup.rs)
+
 **An analytical database built for agents to use directly.** Columnar storage with a
 write-ahead log, a vectorized query engine, and MCP as a first-class interface, so an agent
 can create a table, load rows into it, and ask questions in plain language without ever
