@@ -15,7 +15,9 @@ cd "$(dirname "$0")/.."
 KEEP=0
 [[ "${1:-}" == "--keep" ]] && KEEP=1
 
-DATA_DIR="${ADB_DEMO_DATA_DIR:-$(mktemp -d -t agedb-demo)}"
+# The template form works on both GNU coreutils and BSD/macOS mktemp:
+# "-t agedb-demo" is rejected by GNU for having too few X characters.
+DATA_DIR="${ADB_DEMO_DATA_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/agedb-demo.XXXXXX")}"
 PORT="${ADB_DEMO_PORT:-8099}"
 KEY="demo-key"
 BASE="http://127.0.0.1:${PORT}"
