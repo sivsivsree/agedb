@@ -1,0 +1,21 @@
+[package]
+name = "adb-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "MCP gateway for AgenticDB"
+
+[dependencies]
+adb-core = { workspace = true }
+adb-engine = { workspace = true }
+adb-planner = { workspace = true }
+adb-query = { workspace = true }
+adb-storage = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

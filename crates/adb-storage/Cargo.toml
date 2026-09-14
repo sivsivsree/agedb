@@ -1,0 +1,23 @@
+[package]
+name = "adb-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "WAL, memtable, Parquet segments and manifests for AgenticDB"
+
+[dependencies]
+adb-core = { workspace = true }
+arrow = { workspace = true }
+parquet = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bincode = { workspace = true }
+crc32fast = { workspace = true }
+bytes = { workspace = true }
+roaring = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

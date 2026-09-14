@@ -1,0 +1,25 @@
+[package]
+name = "adb-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "AgenticDB server: MCP over stdio, plus REST and MCP over HTTP"
+
+[[bin]]
+name = "agedb"
+path = "src/main.rs"
+
+[dependencies]
+adb-core = { workspace = true }
+adb-engine = { workspace = true }
+adb-mcp = { workspace = true }
+adb-api = { workspace = true }
+adb-storage = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

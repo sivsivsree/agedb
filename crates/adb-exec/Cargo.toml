@@ -1,0 +1,21 @@
+[package]
+name = "adb-exec"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Vectorized Arrow execution engine for AgenticDB"
+
+[dependencies]
+adb-core = { workspace = true }
+adb-planner = { workspace = true }
+adb-storage = { workspace = true }
+arrow = { workspace = true }
+roaring = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

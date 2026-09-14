@@ -1,0 +1,15 @@
+# Build output
+/target
+
+# Local data directories
+/data
+*.parquet
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local tooling state
+.claude/
