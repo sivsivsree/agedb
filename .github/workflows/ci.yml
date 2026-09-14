@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  style:
+    name: style
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      # This repository does not use em dashes or en dashes, anywhere.
+      # The pattern is written as an escape so this file does not trip its own check.
+      - name: Check for em dashes
+        run: |
+          if grep -rInP '\x{2014}|\x{2013}' \
+               --include='*.rs' --include='*.md' --include='*.sh' \
+               --include='*.toml' --include='*.yml' --include='*.json' \
+               --exclude-dir=target --exclude-dir=.git .; then
+            echo "::error::Found an em dash or en dash. Use a colon, comma, full stop or parentheses."
+            exit 1
+          fi
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace
+
+      - name: End-to-end demo
+        run: examples/demo.sh
+
+  msrv:
+    name: minimum supported rust version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the MSRV toolchain
+        run: rustup toolchain install 1.89 --profile minimal
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo +1.89 build --workspace
