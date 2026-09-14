@@ -14,7 +14,7 @@ jobs:
     name: style
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Check formatting
         run: cargo fmt --all --check
@@ -35,7 +35,7 @@ jobs:
     name: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: Swatinem/rust-cache@v2
 
@@ -52,12 +52,12 @@ jobs:
     name: minimum supported rust version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install the MSRV toolchain
-        run: rustup toolchain install 1.89 --profile minimal
+        run: rustup toolchain install 1.90 --profile minimal
 
       - uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo +1.89 build --workspace
+        run: cargo +1.90 build --workspace

@@ -45,7 +45,7 @@ agedb takes the position that the interface *is* the product:
 
 ## Quickstart
 
-Requires Rust 1.89 or newer ([rustup](https://rustup.rs)). No other dependencies, no server
+Requires Rust 1.90 or newer ([rustup](https://rustup.rs)). No other dependencies, no server
 to install, no Docker needed.
 
 ```bash

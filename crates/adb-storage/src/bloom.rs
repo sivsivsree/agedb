@@ -99,10 +99,9 @@ impl<'de> Deserialize<'de> for BloomFilter {
                 wire.k
             ))));
         }
-        let bits = raw
-            .chunks_exact(8)
-            .map(|c| u64::from_le_bytes(c.try_into().expect("chunk is 8 bytes")))
-            .collect();
+        // The length was checked above, so the remainder is empty.
+        let (words, _) = raw.as_chunks::<8>();
+        let bits = words.iter().copied().map(u64::from_le_bytes).collect();
         Ok(Self { bits, k: wire.k })
     }
 }

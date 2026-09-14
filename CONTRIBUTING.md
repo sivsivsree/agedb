@@ -12,7 +12,7 @@ cargo test --workspace     # 301 tests, about 15 seconds after the first build
 examples/demo.sh           # the whole system end to end, about 40 seconds
 ```
 
-You need Rust 1.89 or newer ([rustup](https://rustup.rs)). Nothing else: no database to
+You need Rust 1.90 or newer ([rustup](https://rustup.rs)). Nothing else: no database to
 install, no Docker, no services. The first build compiles Arrow and Parquet and takes a few
 minutes.
 
@@ -73,8 +73,9 @@ ADB_LOG=debug cargo test -p adb-engine -- --nocapture
 
 ## What a pull request needs
 
-CI runs formatting, clippy with warnings denied, the full test suite, a release build and a
-style check. All of it must pass. Beyond that:
+CI runs formatting, a check for stray em dashes, clippy with warnings denied, the full test
+suite, the end-to-end demo, and a build on the minimum supported Rust version. All of it
+must pass. Beyond that:
 
 **Tests.** New behaviour needs a test that fails without the change. A bug fix needs a
 regression test that reproduces the bug first. Specific areas expect specific tests:
