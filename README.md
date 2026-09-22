@@ -1,8 +1,11 @@
-# agedb
+# AgeDB
+
 
 [![CI](https://github.com/sivsivsree/agedb/actions/workflows/ci.yml/badge.svg)](https://github.com/sivsivsree/agedb/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.90%2B-orange.svg)](https://rustup.rs)
+
+<img src="./agedb.png"/>
 
 **An analytical database built for agents to use directly.** Columnar storage with a
 write-ahead log, a vectorized query engine, and MCP as a first-class interface, so an agent
@@ -17,6 +20,8 @@ Agent: "Which companies look most likely to convert?"
 
 Status: v0.1, single node, 301 tests. Written in Rust. Contributions welcome, and the
 [known gaps](ARCHITECTURE.md#known-gaps) are a good place to start.
+
+
 
 ## Why this exists
 
