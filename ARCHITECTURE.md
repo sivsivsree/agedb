@@ -1,7 +1,8 @@
 # Architecture
 
-AgenticDB (`agedb`) is an agent-native analytical database: columnar storage with a
-write-ahead log, a vectorized query engine, and MCP as a first-class interface.
+AgenticDB (`agedb`, a working name) is an agent-native analytical database: columnar
+storage with a write-ahead log, a vectorized query engine, deterministic natural-language
+translation with no model in the query path, and MCP as a first-class interface.
 
 This document covers why the system is shaped the way it is, what v0.1 actually does, the
 on-disk formats, and where the seams for later work are. [`README.md`](README.md) is the
@@ -10,7 +11,7 @@ introduction and [`docs/usage.md`](docs/usage.md) is the operator guide.
 ```
                      Agents / LLMs
                            │
-             MCP (stdio or HTTP)   REST
+   MCP (stdio or Streamable HTTP)   REST
                            │        │
                   ┌────────▼────────▼────────┐
                   │  adb-mcp  /  adb-api     │  auth, scopes, per-key limits
@@ -25,7 +26,7 @@ introduction and [`docs/usage.md`](docs/usage.md) is the operator guide.
 ┌───────▼────────┐   ┌─────────▼────────┐   ┌──────────▼─────────┐
 │   adb-query    │   │   adb-planner    │   │      adb-exec      │
 │ NL to plan JSON│──▶│ plan to IR to    │──▶│ vectorized Arrow   │
-│ (rules or LLM) │   │ validated plan   │   │ operators          │
+│ (local rules)  │   │ validated plan   │   │ operators          │
 └────────────────┘   └──────────────────┘   └──────────┬─────────┘
                                                        │
                                             ┌──────────▼─────────┐
@@ -44,20 +45,25 @@ agent rather than a person". Ten decisions follow from that, and they explain mo
 code.
 
 **1. Agent-first, not SQL-first.** The primary interface is a small set of typed tools
-(`table_create`, `data_insert`, `data_query`), not a query language. An agent should not
-have to generate correct SQL, and a database should not have to guess what a generated
-string meant. Text-to-SQL fails silently: it produces a query that runs and returns the
-wrong number. A tool call that names a column which does not exist fails loudly, with the
-real column names in the error.
+(`table_create`, `data_insert`, `data_query`), not a query language. A well-configured SQL
+database also rejects a column that does not exist; the difference here is what happens
+around that. The error names the real columns so the next attempt can be right, meaning is
+checked as well as names (`sum(id)` is refused), the plan that ran is echoed back, and the
+same checks, budgets and tenancy apply whichever model or front end sent the request.
+None of this makes an answer correct for the business question: a valid plan can still sum
+gross revenue when net was meant. The echoed plan exists so that can be caught.
 
 **2. One intermediate representation, and everything converges on it.** Natural language,
 structured plans, and later SQL all lower into the same Query IR, which is validated once.
 That is what keeps the guarantees in one place instead of being re-implemented per front
 end, and it is why adding SQL later is a front end rather than a rewrite.
 
-**3. The model never emits executable operations.** A language model produces a structured
-plan, which is data. The database decides whether that data is legal. This is the
-difference between "the LLM wrote a query" and "the LLM described what it wanted".
+**3. No model in the query path, and callers never emit executable operations.** Natural
+language is translated in-process by deterministic rules, so a question costs microseconds
+rather than a model round trip, gives the same plan every time, and sends nothing
+anywhere. A calling agent that wants precision sends a structured plan, which is data. The
+database decides whether that data is legal. This is the difference between "the agent
+wrote a query" and "the agent described what it wanted".
 
 **4. Schemas carry meaning, not just types.** `amount decimal` tells a model nothing.
 `amount float64, semantic_type currency, currency USD, aggregate with sum, "Total order
@@ -87,6 +93,8 @@ leak another tenant's rows.
 **9. A deliberately small surface for an LLM.** There is no `execute_arbitrary_query` tool.
 Capabilities are scopes (`data:insert`, `schema:write`), and every query runs under a row,
 byte and time budget that the executor enforces while running, not the edge before starting.
+The time budget is cooperative: it is checked between batches and between stages, so a
+single sort or merge step in progress finishes before the query is stopped.
 
 **10. Do not rebuild ClickHouse from scratch.** Arrow for in-memory columnar data, Parquet
 for persistence, and a custom WAL, catalog, planner and executor on top. The interesting
@@ -103,8 +111,8 @@ Deliberately small, and everything in it works end to end:
 | Tables | create, describe, list, drop, evolve schema |
 | Data | insert, upsert, get by key, delete by key |
 | Query | projection, filter, sort, limit, offset, count, sum, avg, min, max, group by |
-| Front ends | MCP over stdio, MCP over HTTP, REST, CLI |
-| Natural language | deterministic rules offline, or an LLM with a forced structured plan |
+| Front ends | MCP over stdio, MCP over Streamable HTTP, REST, CLI |
+| Natural language | deterministic rules, in-process, no model; refuses what it cannot answer in full |
 
 What is absent is listed under [What v0.1 does not do](#what-v01-does-not-do), with the seam
 each missing feature attaches to.
@@ -117,10 +125,10 @@ each missing feature attaches to.
 | `adb-storage` | WAL, memtable, Parquet segments, manifests, key index, compaction, object store. Synchronous. |
 | `adb-planner` | Query IR, validator, optimizer, physical plan. |
 | `adb-exec` | Vectorized operators over Arrow, budgets and statistics. |
-| `adb-query` | Natural language to structured plan (rules, or an LLM), schema retrieval. |
+| `adb-query` | Natural language to structured plan (deterministic rules), schema retrieval. |
 | `adb-engine` | The facade: catalog, tables and the query path, one entry point per operation. |
 | `adb-mcp` | MCP tools, JSON-RPC, API keys and scopes, stdio transport. |
-| `adb-api` | REST, plus MCP over HTTP. |
+| `adb-api` | REST, plus MCP over Streamable HTTP. |
 | `adb-server` | The `agedb` binary. |
 | `bench` | Ingest and query benchmarks. |
 
@@ -157,14 +165,23 @@ one, or two aggregations, are rejected with a specific message.
 
 Three front ends, one engine. They share the tool implementations, so they cannot drift.
 
-**MCP** is the primary interface, over stdio (an agent launches the process) or HTTP. The
+**MCP** is the primary interface, over stdio (an agent launches the process) or Streamable
+HTTP (revision 2025-06-18). The
 tool names follow a `noun_verb` scheme: `database_create`, `table_describe`, `data_query`
 and so on, fourteen in total. Dotted spellings (`data.query`) are accepted as aliases. Tool
 errors come back as results with `isError` set, so the model reads the message and can
 correct itself, while protocol faults are JSON-RPC errors.
 
-**REST** mirrors the same operations for scripts and services, and `POST /v1/mcp` carries
-MCP JSON-RPC for clients that prefer HTTP.
+**Streamable HTTP** lives at `/mcp` (and `/v1/mcp`). `POST` carries one JSON-RPC message
+and answers a request as a one-event SSE stream when the client accepts `text/event-stream`,
+or as plain JSON otherwise. `GET` opens a server-to-client event stream, which carries only
+keep-alives today because the server has no unsolicited messages; it is closed as soon as
+graceful shutdown begins so it cannot hold the drain open. `initialize` issues an
+`Mcp-Session-Id`; an unknown one gets `404` and `DELETE` ends it. A foreign `Origin` is
+refused (DNS rebinding), and an unsupported `MCP-Protocol-Version` gets `400`. Sessions are
+correlation only: every request still authenticates with its API key.
+
+**REST** mirrors the same operations for scripts and services.
 
 **CLI** (`agedb query`) runs a single query for demos and shell pipelines.
 
@@ -284,31 +301,34 @@ tenant comes from the API key, never from the request body.
 ## Natural language
 
 ```
-request → schema retrieval → translator → PlanRequest (JSON) → validate → run
+request → schema lookup → rule translator → PlanRequest (JSON) → validate → run
 ```
 
-The model is given the retrieved schema, including descriptions, semantic types, units,
-currencies, default aggregations and declared relationships, plus a tool whose input schema
-is the plan shape, and is *forced* to call it. The result is data, which then passes through
-the same validator as a hand-written plan. A hallucinated column becomes `not_found`, not a
-wrong answer.
+There is no language model in the query path. Translation runs in-process, in
+microseconds, with no API key and no network call. That is a deliberate trade:
 
-Sensitive columns are omitted from retrieved context entirely, so they cannot leak through a
-prompt. An agent that knows the name can still query it explicitly, which is an
-authorization decision rather than a prompting one.
+* **Latency.** The calling agent already pays for its own model round trip. A second one
+  inside the database, on every question, would add hundreds of milliseconds to seconds.
+* **Determinism.** The same question over the same schema yields the same plan, so the
+  corpus in `crates/adb-query/tests/nl.rs` is an assertion about behaviour rather than about
+  a model version, and answers are reproducible across runs and across calling models.
+* **Nothing leaves the process.** No prompt is built, so no schema, row or sensitive value
+  can leak through one.
 
-Two translators, one interface (`IntentTranslator`):
+`RuleTranslator` handles counts, sums, averages, min/max, group-bys, top-N, comparisons,
+null checks, relative and absolute time windows, and ranking questions. "Which companies
+look most likely to convert" resolves through the `score` column's description and its
+declared aggregation. Columns resolve by name, loose forms of the name, unambiguous semantic
+synonyms, and descriptions.
 
-* `RuleTranslator` is deterministic, offline and needs no API key. It handles counts, sums,
-  averages, min/max, group-bys, top-N, comparisons, null checks, relative and absolute time
-  windows, and ranking questions. "Which companies look most likely to convert" resolves
-  through the `score` column's description and its declared aggregation. It refuses what it
-  cannot do, listing the available columns.
-* `AnthropicTranslator` uses a hosted model with the plan JSON schema as a forced tool call,
-  enabled when `ANTHROPIC_API_KEY` is set. If it is unreachable, the engine falls back to
-  the rules and says so in the response warnings.
+It refuses rather than guesses. A request that names two tables, or asks about rows missing
+from another table, is `unsupported`: it is never answered from one table as though that
+were the whole answer, because a validator cannot tell that a valid one-table plan left
+half the question out. Anything else it cannot parse is refused with the available columns
+listed. The refusal is the cue for the calling agent, which is usually a language model
+already, to send a structured plan.
 
-Both echo the plan that ran back to the caller, so an agent can see how its question was
+The echoed plan is part of the answer, so an agent can see how its question was
 interpreted and reuse or adjust it.
 
 ## Guardrails
@@ -317,14 +337,24 @@ Scopes: `database:read|write`, `schema:read|write`, `data:insert|update|delete`.
 the API key, not in the request.
 
 Limits are enforced *inside* execution, not at the edge. Bytes are charged as segments are
-opened, the deadline is checked between batches, and a result that hits the row budget is
-truncated *and says so* in `stats.truncated` and `warnings`. A caller-supplied `limit` above
-the budget is clamped, with a warning, rather than silently honoured or rejected.
+opened, and a result that hits the row budget is truncated *and says so* in
+`stats.truncated` and `warnings`. A caller-supplied `limit` above the budget is clamped,
+with a warning, rather than silently honoured or rejected.
+
+The deadline is checked before each segment and memtable batch in the scan, and again on
+the coordinator after the scans, per merged partial, and before finishing, sorting and
+limiting. It is cooperative, not a hard kill: a step already running, such as one sort,
+completes first, so a query can overrun by the length of that step.
+
+`sensitive` is not access control. It keeps a column out of `select *`, out of schema
+context and out of error suggestions, but any key that may query the table can select the
+column by name. Data a caller must never read belongs in a separate table, database or
+tenant. Column-level authorization is not implemented.
 
 ## Verification
 
 ```bash
-cargo test --workspace          # 301 tests
+cargo test --workspace          # 305 tests
 cargo clippy --workspace --all-targets -- -D warnings
 examples/demo.sh                # the full agent story, end to end
 ```
@@ -339,8 +369,9 @@ Beyond unit tests, the suite includes:
   acknowledged row to be queryable.
 * **Pruning actually prunes**: assertions on segment read and prune counters, because a
   correct-but-unpruned result is a silent performance failure.
-* **Real protocol frames**: the MCP tests drive JSON-RPC over pipes, and the REST tests go
-  through the real router with headers and status codes.
+* **Real protocol frames**: the MCP tests drive JSON-RPC over pipes, and the REST and
+  Streamable HTTP tests go through the real router with headers, status codes and SSE
+  bodies, including an event stream that must end when shutdown begins.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for what a change is expected to bring with it.
 
@@ -351,7 +382,10 @@ table, WAL fsync off (the harness measures the engine, not the disk's flush late
 
 These are a baseline for this engine, not a comparison with anything else. Comparing to
 ClickHouse means running the same queries on ClickHouse and reporting its version and
-hardware, which has not been done here.
+hardware, which has not been done here. Nor do they measure the claim the project rests on,
+that an agent completes analytical tasks more accurately, cheaply and safely with agedb than
+with a well-configured alternative. That needs a task-level evaluation with the same
+model, data and tasks on both sides, which is planned and not yet run.
 
 Machine: Apple M1, 8 cores, 8 GiB RAM, macOS 26.2, rustc 1.97.1. 2,000,000 rows, 8
 partitions, 9 repetitions per query.
@@ -410,9 +444,12 @@ Deliberately out of scope, each with the seam it attaches to:
   `adb-planner`.
 * **Exact decimals.** Money is `float64` with `semantic_type: currency`. A `Decimal128` type
   would touch `adb-core::types`, the Arrow mapping, and the aggregate states.
-* **Distribution and high availability.** Single node. The seam is `LogStore`: replacing the
-  file-backed log with a Raft log and driving `apply` from committed entries is the whole
-  job, which is why `apply` determinism is enforced now.
+* **Distribution and high availability.** Single node. The seam is `LogStore`: a Raft log
+  can drive `apply` from committed entries, which is why `apply` determinism is enforced
+  now. That is the starting point, not the job. Snapshots and log truncation, membership
+  changes, read consistency (leader reads or read index), recovery of a lagging or
+  replaced node, and failure testing under partitions each need their own design and
+  validation.
 * **S3, R2 and GCS.** `ObjectStore` is a trait with one filesystem implementation. A remote
   backend also needs an async variant.
 * **A control plane and dashboard.** Organizations, billing, usage metering, and a

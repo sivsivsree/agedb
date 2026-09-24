@@ -2,14 +2,16 @@
 //!
 //! The REST surface mirrors the MCP tools one-for-one rather than inventing a
 //! second data model: the same validated plans, the same scopes, the same
-//! limits. `POST /v1/mcp` speaks the same JSON-RPC as the stdio transport, so an
-//! MCP client can connect over HTTP without a separate implementation.
+//! limits. `/mcp` (and `/v1/mcp`) implements the MCP Streamable HTTP transport
+//! over the same JSON-RPC handler as stdio, so an MCP client can connect over
+//! HTTP without a separate implementation.
 //!
 //! The engine is synchronous, so every handler runs it inside
 //! `spawn_blocking`: a scan is CPU- and file-bound, and pretending otherwise
 //! would block the async runtime's worker threads.
 
 pub mod error;
+pub mod mcp_http;
 pub mod rest;
 
 pub use error::ApiError;
@@ -30,8 +32,14 @@ where
         .await
         .map_err(|e| AdbError::storage(format!("cannot bind {address}: {e}")))?;
     tracing::info!(%address, "HTTP listening");
-    axum::serve(listener, router(state))
-        .with_graceful_shutdown(shutdown)
+    let app = router(state.clone());
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            shutdown.await;
+            // Graceful shutdown waits for open connections, so end the MCP
+            // event streams rather than letting them hold the drain open.
+            state.begin_shutdown();
+        })
         .await
         .map_err(|e| AdbError::storage(format!("http server: {e}")))
 }

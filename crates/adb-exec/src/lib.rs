@@ -56,7 +56,19 @@ pub fn execute(
     snapshots: &[Arc<PartitionSnapshot>],
     limits: QueryLimits,
 ) -> Result<QueryResult> {
-    let budget = Budget::new(limits);
+    execute_with_budget(plan, snapshots, Budget::new(limits))
+}
+
+/// Execute `plan` under an existing budget.
+///
+/// The deadline is checked inside the scan and again at every stage boundary
+/// on the coordinator (after the scans, per merged partial, and before
+/// finishing, sorting and limiting), so no stage starts once time is up.
+pub fn execute_with_budget(
+    plan: &PhysicalPlan,
+    snapshots: &[Arc<PartitionSnapshot>],
+    budget: Budget,
+) -> Result<QueryResult> {
     let mut warnings = Vec::new();
 
     // `count(*)` with no filter is answerable from segment and memtable
@@ -78,7 +90,9 @@ pub fn execute(
     };
 
     let renamed = apply_rename(combined, plan)?;
+    budget.check_deadline()?;
     let sorted = sort::sort_batch(&renamed, &plan.sort, plan.fetch_rows())?;
+    budget.check_deadline()?;
     let limited = apply_offset_limit(&sorted, plan, &budget, &mut warnings);
     let aligned = align_output(&limited, &plan.output)?;
 
@@ -125,6 +139,7 @@ fn run_scan(
         Ok(batches)
     })?;
 
+    budget.check_deadline()?;
     let batches: Vec<RecordBatch> = collected.into_iter().flatten().collect();
     concat_or_empty(batches, plan)
 }
@@ -155,6 +170,7 @@ fn run_aggregate(
 
     let mut merged: Option<Aggregator> = None;
     for partial in partials.into_iter().flatten() {
+        budget.check_deadline()?;
         merged = Some(match merged {
             None => partial,
             Some(mut acc) => {
@@ -167,6 +183,7 @@ fn run_aggregate(
         Some(aggregator) => aggregator,
         None => Aggregator::new(spec, &input_schema, &plan.output),
     };
+    budget.check_deadline()?;
     aggregator.finish()
 }
 

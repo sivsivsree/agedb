@@ -38,6 +38,7 @@ arrow = "59.3"
 parquet = { version = "59.3", features = ["arrow"] }
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "fs", "io-std", "io-util", "sync", "time", "signal"] }
 axum = "0.8"
+futures-util = { version = "0.3", default-features = false }
 async-trait = "0.1"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["preserve_order"] }
@@ -52,10 +53,6 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 clap = { version = "4", features = ["derive", "env"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-# native-tls on macOS/Windows and OpenSSL on Linux: this avoids compiling
-# aws-lc-sys, which is a large C build for a dependency used only by the
-# optional Claude translator.
-reqwest = { version = "0.13", default-features = false, features = ["json", "blocking", "http2", "charset", "default-tls"] }
 bytes = "1"
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }

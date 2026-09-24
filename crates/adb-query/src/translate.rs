@@ -1,9 +1,8 @@
 //! The translator interface.
 //!
-//! One trait, two implementations (deterministic rules and Claude), so the
-//! natural-language path is testable offline and swappable at runtime. Both must
-//! return a [`PlanRequest`]; neither is trusted, because both feed the same
-//! validator.
+//! One trait, implemented by the deterministic [`crate::RuleTranslator`]. A
+//! translator must return a [`PlanRequest`], and its output is not trusted: it
+//! feeds the same validator as a hand-written plan.
 
 use std::sync::Arc;
 

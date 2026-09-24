@@ -1,4 +1,4 @@
-//! Schema retrieval: the context an LLM sees (see "Natural language" in ARCHITECTURE.md).
+//! Schema retrieval: the context a calling agent reads (see "Natural language" in ARCHITECTURE.md).
 //!
 //! Two rules shape this:
 //!
@@ -7,8 +7,8 @@
 //!   value before refunds"` tells it what to do with the column.
 //! * **Sensitive columns never appear.** A column marked `sensitive` is omitted
 //!   entirely, so it cannot be leaked through a prompt, a suggestion or an error
-//!   message. An agent that already knows the name can still query it
-//!   explicitly, which is an authorization decision, not a prompting one.
+//!   message. This is hygiene, not access control: an agent that already
+//!   knows the name and may query the table can still select it explicitly.
 
 use std::sync::Arc;
 

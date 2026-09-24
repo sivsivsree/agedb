@@ -18,7 +18,8 @@ pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// MCP revision we speak. If a client asks for a different one we still answer
 /// with ours, which is what the spec prescribes for version negotiation.
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
-const SUPPORTED_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
+/// Every revision this server can speak, newest first.
+pub const SUPPORTED_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
 pub struct McpServer {
     engine: Arc<Engine>,
@@ -99,8 +100,10 @@ impl McpServer {
             "instructions": format!(
                 "An agent-native analytical database. Create databases and tables, insert rows, \
                  then ask questions with data_query, either in plain language via `request` or \
-                 as a structured `plan`. Natural language is handled by: {}. Start with \
-                 table_list or schema_get to see what exists.",
+                 as a structured `plan`. Natural language is parsed locally by deterministic \
+                 {} (no language model), and a question it cannot answer completely is \
+                 refused rather than approximated. Every result echoes the plan that ran; \
+                 check it. Start with table_list or schema_get to see what exists.",
                 self.engine.translator_name()
             ),
         })

@@ -13,6 +13,8 @@ adb-engine = { workspace = true }
 adb-mcp = { workspace = true }
 adb-query = { workspace = true }
 axum = { workspace = true }
+futures-util = { workspace = true }
+uuid = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

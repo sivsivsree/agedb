@@ -13,7 +13,7 @@ use adb_core::{
     Aggregation, ColumnSchema, DataType, DatabaseName, QueryLimits, SemanticType, TableName,
     TableSchema, TenantId, Value,
 };
-use adb_exec::{execute, QueryResult};
+use adb_exec::{execute, execute_with_budget, Budget, QueryResult};
 use adb_planner::{physical, validate, AggregateExpr, AggregateFunc, Expr, Query, SortExpr};
 use adb_storage::object_store::LocalFsStore;
 use adb_storage::rows;
@@ -575,6 +575,53 @@ fn limits_are_enforced_inside_execution() {
     assert_eq!(result.rows(), 5);
     assert!(!result.stats.truncated);
     assert!(result.warnings.is_empty());
+}
+
+#[test]
+fn the_deadline_is_checked_after_the_scan_not_only_inside_it() {
+    // An empty table gives the scan nothing to read, so its per-batch deadline
+    // check never runs. Merge, finish and sort must still refuse to start once
+    // the budget is spent, or the time limit is only a scan limit.
+    let dir = TempDir::new().unwrap();
+    let store = Arc::new(LocalFsStore::new(dir.path()).unwrap());
+    let schema = schema();
+    let table = TableStore::open(
+        store,
+        &TenantId::new("t1").unwrap(),
+        &DatabaseName::new("crm").unwrap(),
+        schema.clone(),
+        StorageConfig::default(),
+    )
+    .unwrap();
+
+    let limits = QueryLimits {
+        max_execution_time_ms: 1_000,
+        ..QueryLimits::unlimited()
+    };
+    let query = scan()
+        .aggregate(
+            vec!["country".to_string()],
+            vec![AggregateExpr::new(
+                AggregateFunc::Sum,
+                Some("amount".into()),
+                "revenue",
+            )],
+        )
+        .sort(vec![SortExpr::desc("revenue")]);
+    let validated = validate(&query, &schema, &limits).unwrap();
+    let plan = physical::build(&validated).unwrap();
+    let snapshots = table.snapshots().unwrap();
+
+    // Well inside the budget, the empty answer comes back.
+    let fresh = execute_with_budget(&plan, &snapshots, Budget::new(limits)).unwrap();
+    assert_eq!(fresh.rows(), 0);
+
+    // Started a minute ago, with a one second budget: no stage may run.
+    let started = std::time::Instant::now() - std::time::Duration::from_secs(60);
+    let err =
+        execute_with_budget(&plan, &snapshots, Budget::started_at(limits, started)).unwrap_err();
+    assert_eq!(err.code(), "limit_exceeded");
+    assert!(err.to_string().contains("max_execution_time"), "{err}");
 }
 
 #[test]
