@@ -32,7 +32,7 @@ Logs always go to stderr, because stdout carries MCP frames.
 # MCP over stdio: an agent launches this and talks JSON-RPC on the pipe.
 agedb --data-dir ./data serve --transport stdio --tenant acme
 
-# REST plus MCP over HTTP.
+# REST, plus MCP over Streamable HTTP at /mcp.
 agedb --data-dir ./data serve --transport http --port 8080 --api-key dev-key --tenant acme
 
 # Both at once.
@@ -47,8 +47,52 @@ agedb --data-dir ./data serve --transport both --api-key dev-key --tenant acme
 | `--api-key` | none | A single key with full access to `--tenant`. Use `--config` for more |
 | `--tenant` | `local` | Tenant for the stdio identity and for `--api-key` |
 | `--database` | none | Database assumed when a call does not name one |
+| `--allow-origin` | none | A browser origin allowed to call MCP over HTTP. Repeatable |
 
 The HTTP transport refuses to start without at least one key.
+
+### MCP over Streamable HTTP
+
+`/mcp` (and `/v1/mcp`, for older configurations) implements the MCP Streamable HTTP
+transport, revision 2025-06-18:
+
+| Method | Behaviour |
+| --- | --- |
+| `POST` | One JSON-RPC message. A request is answered as `text/event-stream` (one `message` event, then the stream closes) when the client accepts it, otherwise as `application/json`. Notifications and client responses get `202` with no body |
+| `GET` | With `Accept: text/event-stream`, a server-to-client event stream. The server sends no unsolicited messages yet, so it carries keep-alives. Without that header, `405` |
+| `DELETE` | Ends the session named by `Mcp-Session-Id` (`204`) |
+
+* A successful `initialize` returns an `Mcp-Session-Id` header. Sending it back is optional;
+  sending an unknown or ended one gets `404`, which tells the client to initialize again.
+  Idle sessions are forgotten after an hour.
+* An `MCP-Protocol-Version` header naming a revision the server does not speak gets `400`.
+* An `Origin` header that is neither this machine nor an `--allow-origin` gets `403`. This is
+  the DNS-rebinding defence the spec asks for; non-browser clients send no `Origin`.
+* Every request still needs `Authorization: Bearer <key>`. A session is correlation, not
+  authentication.
+
+A client configuration, for example in `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "agedb": {
+      "type": "http",
+      "url": "http://localhost:8080/mcp",
+      "headers": { "Authorization": "Bearer dev-key" }
+    }
+  }
+}
+```
+
+By hand:
+
+```bash
+curl -N -X POST localhost:8080/mcp \
+  -H 'authorization: Bearer dev-key' -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
 
 ## One-shot queries
 
@@ -118,7 +162,7 @@ is the quickest way to see how a question was interpreted.
 | --- | --- | --- |
 | `max_rows` | 10,000 | Result rows. A truncated result sets `stats.truncated` |
 | `max_bytes_scanned` | 4 GiB | Charged as segments are opened, mid-query |
-| `max_execution_time_ms` | 30,000 | Checked between batches |
+| `max_execution_time_ms` | 30,000 | Checked between batches and between stages. Cooperative: a single sort or merge step is not interrupted |
 | `max_write_rows` | 1,000,000 | Rows in one insert or upsert call |
 
 A caller-supplied `limit` above `max_rows` is clamped, with a warning in the response.
@@ -129,7 +173,7 @@ A caller-supplied `limit` above `max_rows` is clamped, with a warning in the res
 | --- | --- |
 | `GET /healthz` | Liveness, version, which translator is active. No key needed |
 | `GET /v1/tools` | The MCP tool catalogue |
-| `POST /v1/mcp` | MCP JSON-RPC over HTTP |
+| `POST GET DELETE /mcp` | MCP over Streamable HTTP (also at `/v1/mcp`) |
 | `GET POST /v1/databases` | List, create |
 | `DELETE /v1/databases/{db}?cascade=true` | Delete |
 | `GET POST /v1/databases/{db}/tables` | List, create |
@@ -186,23 +230,28 @@ The schema is what makes plain-language questions work, so it is worth a minute:
 * **`default_aggregation`** lets "total revenue" resolve without naming a column.
 * **`description`** is shown to the language layer. Write it for someone who has never seen
   the table.
-* **`sensitive`** keeps a column out of `select *` and out of anything sent to a model. It
-  can still be queried by name.
+* **`sensitive`** keeps a column out of `select *`, out of schema context and out of
+  suggestions in error messages. It is **not access control**: any key that may query the
+  table can still select the column by name. Keep data a caller must never read in a
+  separate table, database or tenant.
 
 Types: `bool`, `int64`, `float64`, `utf8`, `timestamp`, `date`, `uuid`, `json`. Money is
 `float64` with `semantic_type: currency`; exact decimals are not implemented yet.
 
 ## Natural language
 
-With no configuration, translation is done by a deterministic rule engine: counts, sums,
-averages, min/max, group-bys, top-N, comparisons, null checks, and time windows such as
-"last 90 days", "this year" or "since 2026-01-01". It refuses what it cannot do and lists
-the available columns.
+Translation is done in-process by a deterministic rule engine. There is no language model
+in the query path, so no API key, no network call and no added latency: the same question
+over the same schema always yields the same plan, typically in microseconds.
 
-Set `ANTHROPIC_API_KEY` to use a hosted model instead, which is forced to emit the same
-structured plan and passes through the same validator. `ADB_NL_MODEL` overrides the model.
-`GET /healthz` reports which translator is active. If the model is unreachable, the engine
-falls back to the rules and says so in the response warnings.
+It handles counts, sums, averages, min/max, group-bys, top-N, comparisons, null checks, and
+time windows such as "last 90 days", "this year" or "since 2026-01-01". It refuses what it
+cannot do and lists the available columns. A question that needs two tables, or rows
+missing from another table, is refused as `unsupported`; it is never answered from one
+table as if that were the whole answer.
+
+A refusal is the cue to send a structured `plan` instead. The calling agent is usually a
+language model already, and a plan is the precise form of what it meant.
 
 ## Stopping the server
 
@@ -211,6 +260,7 @@ stop:
 
 1. HTTP stops accepting new connections and in-flight requests get up to 10 seconds to
    finish. After that the process exits anyway, so one stuck client cannot keep it alive.
+   Open MCP event streams (`GET /mcp`) are closed at once rather than waited on.
 2. The stdio transport stops between requests.
 3. Every table's memtable is flushed into a segment, so a restart replays a short
    write-ahead log instead of the whole thing.
@@ -244,6 +294,9 @@ even `kill -9` loses nothing; a hard kill just makes the next start replay more 
 | `the HTTP transport needs at least one API key` | Pass `--api-key` or `--config` |
 | Query returns fewer rows than expected, `stats.truncated` is true | The key's `max_rows` budget cut the result. Add a `limit` or a filter |
 | `column "x" not found` | The error lists the columns that do exist. Call `table_describe` |
+| `unsupported` for a plain-language question | It needs a join or data the rules cannot express. Send a structured `plan` for one table, or split the question |
+| `403` on `/mcp` with `origin ... is not allowed` | A browser client on another origin. Add it with `--allow-origin` |
+| `404` on `/mcp` with `unknown or expired MCP session` | The server restarted or the session was ended or idle. Send `initialize` again |
 
 Raise the log level to see plans and timings:
 
@@ -261,3 +314,7 @@ Reports ingest rows/sec and query p50/p95/p99, plus how many segments were prune
 flags: `--memtable-rows` (how many segments get created, which determines how much pruning
 is possible), `--fsync`, `--repeats`, `--keep`. Baseline numbers for one machine are in
 [`../ARCHITECTURE.md`](../ARCHITECTURE.md#baseline-numbers).
+
+These numbers track the engine against itself from change to change. They are not a
+comparison with other databases, and they do not measure whether an agent gets better
+answers, which is the claim that matters (see "Evidence" in the README).

@@ -50,8 +50,8 @@ pub struct Engine {
     /// Serializes DDL so validation and the log append are atomic together.
     ddl_lock: Mutex<()>,
     tables: RwLock<BTreeMap<TableKey, Arc<TableStore>>>,
-    translator: Box<dyn IntentTranslator>,
-    /// Always available, and the fallback when a remote translator is unreachable.
+    /// Natural language is parsed in-process by deterministic rules: no model,
+    /// no network call, and the same request always yields the same plan.
     rules: RuleTranslator,
     config: EngineConfig,
 }
@@ -60,7 +60,7 @@ impl std::fmt::Debug for Engine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Engine")
             .field("data_dir", &self.config.data_dir)
-            .field("translator", &self.translator.name())
+            .field("translator", &self.rules.name())
             .finish_non_exhaustive()
     }
 }
@@ -133,20 +133,6 @@ impl Engine {
             "recovered catalog from the system log"
         );
 
-        let translator: Box<dyn IntentTranslator> = match adb_query::AnthropicTranslator::from_env()
-        {
-            Some(anthropic) => {
-                tracing::info!(model = anthropic.model(), "natural language: Claude");
-                Box::new(anthropic)
-            }
-            None => {
-                tracing::info!(
-                    "natural language: built-in rules (set ANTHROPIC_API_KEY to use Claude)"
-                );
-                Box::new(RuleTranslator::new())
-            }
-        };
-
         let engine = Self {
             _lock: lock,
             store,
@@ -154,7 +140,6 @@ impl Engine {
             system_log: recovered.store,
             ddl_lock: Mutex::new(()),
             tables: RwLock::new(BTreeMap::new()),
-            translator,
             rules: RuleTranslator::new(),
             config,
         };
@@ -188,7 +173,7 @@ impl Engine {
     }
 
     pub fn translator_name(&self) -> &'static str {
-        self.translator.name()
+        self.rules.name()
     }
 
     pub fn snapshot(&self) -> Arc<CatalogSnapshot> {
@@ -583,25 +568,12 @@ impl Engine {
     /// Run a query, from either a structured plan or natural language.
     pub fn query(&self, ctx: &RequestContext, source: QuerySource) -> Result<QueryOutcome> {
         ctx.require(Scope::DatabaseRead)?;
-        let mut warnings = Vec::new();
+        let warnings = Vec::new();
         let (plan_request, interpretation) = match source {
             QuerySource::Plan(plan) => (plan, None),
             QuerySource::Request(request) => {
                 let context = self.translation_context(ctx)?;
-                let translation = match self.translator.translate(&request, &context) {
-                    Ok(translation) => translation,
-                    Err(error) if self.translator.name() != "rules" && !error.is_client_error() => {
-                        // The remote translator is unavailable; the deterministic
-                        // one may still handle the request. Say which was used.
-                        tracing::warn!(%error, "falling back to the rule translator");
-                        warnings.push(format!(
-                            "the language model was unavailable ({error}); the request was \
-                             interpreted by the built-in rules"
-                        ));
-                        self.rules.translate(&request, &context)?
-                    }
-                    Err(error) => return Err(error),
-                };
+                let translation = self.rules.translate(&request, &context)?;
                 let interpretation = translation.interpretation.clone();
                 (translation.plan, Some(interpretation))
             }
@@ -688,7 +660,7 @@ impl Engine {
     pub fn interpret(&self, ctx: &RequestContext, request: &str) -> Result<PlanRequest> {
         ctx.require(Scope::DatabaseRead)?;
         let context = self.translation_context(ctx)?;
-        Ok(self.translator.translate(request, &context)?.plan)
+        Ok(self.rules.translate(request, &context)?.plan)
     }
 
     /// Schema context an agent (or a model) can read.

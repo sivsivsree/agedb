@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! agedb serve --transport stdio          # MCP over stdio, for an agent
-//! agedb serve --transport http --port 8080
+//! agedb serve --transport http --port 8080  # REST, plus MCP at /mcp
 //! agedb query "total revenue by country"  # one-shot, for demos and scripts
 //! ```
 //!
@@ -80,6 +80,12 @@ enum Command {
         /// Database assumed when a call does not name one.
         #[arg(long, env = "ADB_DATABASE")]
         database: Option<String>,
+
+        /// A browser origin allowed to call MCP over HTTP, e.g.
+        /// https://app.example.com. Repeatable. Local origins are always
+        /// allowed; requests without an Origin header are unaffected.
+        #[arg(long = "allow-origin", value_name = "ORIGIN")]
+        allow_origins: Vec<String>,
     },
 
     /// Run one query and print the result.
@@ -110,7 +116,7 @@ enum Command {
 enum Transport {
     /// JSON-RPC over stdin/stdout, for an agent that launches the database.
     Stdio,
-    /// REST plus MCP-over-HTTP.
+    /// REST plus MCP over Streamable HTTP.
     Http,
     /// Both at once.
     Both,
@@ -291,35 +297,44 @@ async fn main() -> std::process::ExitCode {
 async fn run(cli: Cli) -> Result<()> {
     match &cli.command {
         None | Some(Command::Serve { .. }) => {
-            let (transport, bind, port, api_key, tenant, database) = match &cli.command {
-                Some(Command::Serve {
-                    transport,
-                    bind,
-                    port,
-                    api_key,
-                    tenant,
-                    database,
-                }) => (
-                    *transport,
-                    bind.clone(),
-                    *port,
-                    api_key.clone(),
-                    tenant.clone(),
-                    database.clone(),
-                ),
-                _ => (
-                    Transport::Stdio,
-                    "127.0.0.1".to_string(),
-                    8080,
-                    None,
-                    "local".to_string(),
-                    None,
-                ),
-            };
+            let (transport, bind, port, api_key, tenant, database, allow_origins) =
+                match &cli.command {
+                    Some(Command::Serve {
+                        transport,
+                        bind,
+                        port,
+                        api_key,
+                        tenant,
+                        database,
+                        allow_origins,
+                    }) => (
+                        *transport,
+                        bind.clone(),
+                        *port,
+                        api_key.clone(),
+                        tenant.clone(),
+                        database.clone(),
+                        allow_origins.clone(),
+                    ),
+                    _ => (
+                        Transport::Stdio,
+                        "127.0.0.1".to_string(),
+                        8080,
+                        None,
+                        "local".to_string(),
+                        None,
+                        Vec::new(),
+                    ),
+                };
             let config = load_config(cli.config.as_ref())?;
             let auth = build_auth(&config, &tenant, api_key.as_ref(), database.as_ref())?;
             let engine = open_engine(&cli)?;
-            serve(engine, auth, transport, bind, port).await
+            let http = HttpOptions {
+                bind,
+                port,
+                allow_origins,
+            };
+            serve(engine, auth, transport, http).await
         }
         Some(Command::Query {
             request,
@@ -394,12 +409,18 @@ async fn run(cli: Cli) -> Result<()> {
 /// keep the server alive indefinitely.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Where and how the HTTP transport listens.
+struct HttpOptions {
+    bind: String,
+    port: u16,
+    allow_origins: Vec<String>,
+}
+
 async fn serve(
     engine: Arc<Engine>,
     auth: AuthRegistry,
     transport: Transport,
-    bind: String,
-    port: u16,
+    options: HttpOptions,
 ) -> Result<()> {
     // One shutdown signal, watched by every transport.
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -411,11 +432,18 @@ async fn serve(
                 "the HTTP transport needs at least one API key: pass --api-key or --config",
             ));
         }
-        let state = adb_api::AppState::new(engine.clone(), auth.clone());
+        let state = adb_api::AppState::new(engine.clone(), auth.clone())
+            .with_allowed_origins(options.allow_origins);
         tracing::info!(keys = auth.key_count(), "HTTP transport enabled");
         let stopping = shutdown_rx.clone();
         Some(tokio::spawn(async move {
-            adb_api::serve_http(&bind, port, state, stopping_signal(stopping)).await
+            adb_api::serve_http(
+                &options.bind,
+                options.port,
+                state,
+                stopping_signal(stopping),
+            )
+            .await
         }))
     } else {
         None

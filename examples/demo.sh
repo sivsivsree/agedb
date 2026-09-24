@@ -5,7 +5,8 @@
 #   2. it stores several thousand leads
 #   3. it asks questions in plain language
 #   4. the same questions, as structured plans
-#   5. the same tools over MCP on stdio, which is how an agent would connect
+#   5. the same tools over MCP, on Streamable HTTP and on stdio, which is how an
+#      agent would connect
 #
 # Usage: examples/demo.sh [--keep]
 set -euo pipefail
@@ -155,7 +156,21 @@ post /v1/databases/crm/query '{"plan":{"table":"leads","filters":[{"column":"rev
 post /v1/databases/crm/query '{"plan":{"operation":"aggregate","table":"leads","metrics":[{"function":"sum","column":"id"}]}}' | show '.error'
 post /v1/databases/crm/query '{"request":"leads joined with customers"}' | show '.error'
 
-say "8. The same tools over MCP on stdio"
+say "8. The same tools over MCP on Streamable HTTP"
+# One JSON-RPC request in, one server-sent event back. The session id comes
+# from initialize; sending it back is optional.
+curl -sS -N -X POST "${BASE}/mcp" "${AUTH[@]}" \
+  -H 'accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"data_query","arguments":{"database":"crm","request":"total value by country in leads"}}}' \
+  | python3 -c '
+import json, sys
+for line in sys.stdin:
+    if line.startswith("data:"):
+        payload = json.loads(line[5:])["result"]["structuredContent"]
+        print("event: message ->", json.dumps(payload["rows"][:3]))
+'
+
+say "9. The same tools over MCP on stdio"
 # Only one process may hold a data directory (the WAL is single-writer), so the
 # HTTP server stops before the stdio session opens the same data.
 kill "${SERVER_PID}" 2>/dev/null || true

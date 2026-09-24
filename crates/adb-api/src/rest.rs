@@ -1,6 +1,6 @@
 //! REST routes.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use adb_core::{AdbError, DatabaseName, RequestContext, TableName};
 use adb_engine::{Engine, QuerySource};
@@ -12,25 +12,81 @@ use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Map as JsonMap, Value as JsonValue};
+use tokio::sync::watch;
 
 use crate::error::{ApiError, ApiResult};
+use crate::mcp_http::{self, Sessions};
 
 #[derive(Clone)]
 pub struct AppState {
     pub engine: Arc<Engine>,
     pub auth: Arc<AuthRegistry>,
     pub mcp: Arc<McpServer>,
+    sessions: Arc<Mutex<Sessions>>,
+    /// Browser origins allowed to call MCP besides this machine's own.
+    allowed_origins: Arc<Vec<String>>,
+    /// Flipped to `true` when the server starts shutting down, which ends
+    /// long-lived event streams so the drain is not held open by them.
+    stopping: Arc<watch::Sender<bool>>,
 }
 
 impl AppState {
     pub fn new(engine: Arc<Engine>, auth: AuthRegistry) -> Self {
         let auth = Arc::new(auth);
         let mcp = Arc::new(McpServer::new(engine.clone(), (*auth).clone()));
-        Self { engine, auth, mcp }
+        Self {
+            engine,
+            auth,
+            mcp,
+            sessions: Arc::default(),
+            allowed_origins: Arc::default(),
+            stopping: Arc::new(watch::channel(false).0),
+        }
+    }
+
+    /// Allow MCP calls from these browser origins, e.g. `https://app.example.com`.
+    /// Local origins are always allowed.
+    pub fn with_allowed_origins(mut self, origins: impl IntoIterator<Item = String>) -> Self {
+        self.allowed_origins = Arc::new(
+            origins
+                .into_iter()
+                .map(|origin| origin.trim_end_matches('/').to_string())
+                .collect(),
+        );
+        self
+    }
+
+    pub(crate) fn origin_allowed(&self, origin: &str) -> bool {
+        mcp_http::is_local_origin(origin)
+            || self
+                .allowed_origins
+                .iter()
+                .any(|allowed| allowed == origin.trim_end_matches('/'))
+    }
+
+    pub(crate) fn sessions(&self) -> MutexGuard<'_, Sessions> {
+        // A panic while holding this lock leaves only a map of timestamps
+        // behind, which is still usable.
+        self.sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub(crate) fn stopping(&self) -> watch::Receiver<bool> {
+        self.stopping.subscribe()
+    }
+
+    /// Start shutting down: open MCP event streams end.
+    pub fn begin_shutdown(&self) {
+        self.stopping.send_replace(true);
     }
 
     /// Authenticate a request and scope it to `database`.
-    fn context(&self, headers: &HeaderMap, database: Option<&str>) -> ApiResult<RequestContext> {
+    pub(crate) fn context(
+        &self,
+        headers: &HeaderMap,
+        database: Option<&str>,
+    ) -> ApiResult<RequestContext> {
         let header = headers
             .get(axum::http::header::AUTHORIZATION)
             .and_then(|value| value.to_str().ok());
@@ -60,7 +116,20 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/v1/tools", get(list_tools))
-        .route("/v1/mcp", post(mcp_over_http))
+        // MCP over Streamable HTTP. `/mcp` is the conventional path clients
+        // expect; `/v1/mcp` is kept for existing configurations.
+        .route(
+            "/mcp",
+            post(mcp_http::post)
+                .get(mcp_http::get)
+                .delete(mcp_http::delete),
+        )
+        .route(
+            "/v1/mcp",
+            post(mcp_http::post)
+                .get(mcp_http::get)
+                .delete(mcp_http::delete),
+        )
         .route("/v1/databases", get(list_databases).post(create_database))
         .route("/v1/databases/{database}", delete(delete_database))
         .route(
@@ -103,24 +172,6 @@ async fn healthz(State(state): State<AppState>) -> Json<JsonValue> {
 
 async fn list_tools() -> Json<JsonValue> {
     Json(json!({ "tools": adb_mcp::tools::definitions_json() }))
-}
-
-/// MCP JSON-RPC over HTTP: the same handler the stdio transport uses.
-async fn mcp_over_http(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    body: String,
-) -> ApiResult<(StatusCode, String)> {
-    let ctx = state.context(&headers, None)?;
-    let mcp = state.mcp.clone();
-    let response = tokio::task::spawn_blocking(move || mcp.handle_line(&body, &ctx))
-        .await
-        .map_err(|e| ApiError(AdbError::internal(format!("the request task failed: {e}"))))?;
-    Ok(match response {
-        // A notification gets 202 with no body, as HTTP transports expect.
-        None => (StatusCode::ACCEPTED, String::new()),
-        Some(line) => (StatusCode::OK, line),
-    })
 }
 
 #[derive(Debug, Deserialize)]

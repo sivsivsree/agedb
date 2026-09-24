@@ -311,8 +311,8 @@ impl PlanRequest {
         Ok(Expr::all(parts))
     }
 
-    /// JSON Schema for this shape, used for the MCP tool contract and as the
-    /// structured-output schema handed to Claude.
+    /// JSON Schema for this shape, used for the MCP tool contract so a calling
+    /// agent can emit a plan directly.
     pub fn json_schema() -> Json {
         json!({
             "type": "object",

@@ -6,13 +6,18 @@
 //! windows. It refuses everything else with a message that says what to do
 //! instead.
 //!
-//! Why ship it at all when [`crate::anthropic`] exists?
+//! Why rules and not a language model?
 //!
-//! * The natural-language path stays testable and reproducible offline: the
-//!   corpus in this file is an assertion about behaviour, not about a model.
-//! * No API key is needed to demo or benchmark the product.
+//! * Latency. Translation runs in-process in microseconds; a hosted model adds
+//!   hundreds of milliseconds to seconds to every question, on top of the
+//!   calling agent's own model round trip.
+//! * Determinism. The same question over the same schema yields the same plan,
+//!   so the corpus in `tests/nl.rs` is an assertion about behaviour, not about
+//!   a model version.
+//! * Nothing leaves the process: no API key, no prompt, no data sent anywhere.
 //! * A refusal here ("I could not turn that into a plan; name the column")
-//!   is strictly better than a plausible-looking wrong query.
+//!   is strictly better than a plausible-looking wrong query, and a question
+//!   that needs two tables is refused rather than answered from one.
 //!
 //! Anything it produces still goes through the validator, so a mistaken column
 //! guess becomes an error rather than a wrong answer.

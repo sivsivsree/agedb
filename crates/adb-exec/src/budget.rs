@@ -2,8 +2,12 @@
 //!
 //! Limits are enforced *inside* execution, not at the edge (see "Guardrails" in ARCHITECTURE.md):
 //! bytes are charged as segments are opened and the deadline is checked between
-//! batches, so a hostile or careless plan is stopped partway rather than after it
-//! has already cost the node everything.
+//! batches and between pipeline stages, so a hostile or careless plan is stopped
+//! partway rather than after it has already cost the node everything.
+//!
+//! The deadline is cooperative: a single kernel call (one sort, one merge of two
+//! partial aggregates) is not interrupted, so a query can overrun its budget by
+//! the duration of the step in progress.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -25,9 +29,15 @@ pub struct Budget {
 
 impl Budget {
     pub fn new(limits: QueryLimits) -> Self {
+        Self::started_at(limits, Instant::now())
+    }
+
+    /// A budget whose clock started at `started`. Lets tests put a query past
+    /// its deadline without depending on how fast the machine is.
+    pub fn started_at(limits: QueryLimits, started: Instant) -> Self {
         Self {
             limits,
-            started: Instant::now(),
+            started,
             bytes_scanned: AtomicU64::new(0),
             rows_scanned: AtomicU64::new(0),
             segments_read: AtomicU64::new(0),
@@ -81,7 +91,8 @@ impl Budget {
         self.truncated.load(Ordering::Relaxed)
     }
 
-    /// Called between batches; turns a long-running query into an error.
+    /// Called between batches and between stages; turns a long-running query
+    /// into an error.
     pub fn check_deadline(&self) -> Result<()> {
         if self.limits.max_execution_time_ms == u64::MAX {
             return Ok(());

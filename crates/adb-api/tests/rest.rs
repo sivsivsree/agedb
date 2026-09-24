@@ -18,7 +18,30 @@ const READER: &str = "reader-key";
 
 struct Api {
     router: axum::Router,
+    state: AppState,
     _dir: TempDir,
+}
+
+/// Status, headers and raw body text, for transports that are not JSON.
+struct Raw {
+    status: StatusCode,
+    headers: axum::http::HeaderMap,
+    body: String,
+}
+
+impl Raw {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers.get(name).and_then(|v| v.to_str().ok())
+    }
+
+    /// The JSON-RPC messages carried by an SSE body, in order.
+    fn sse_messages(&self) -> Vec<Json> {
+        self.body
+            .lines()
+            .filter_map(|line| line.strip_prefix("data:"))
+            .map(|data| serde_json::from_str(data.trim()).unwrap())
+            .collect()
+    }
 }
 
 impl Api {
@@ -40,9 +63,44 @@ impl Api {
                     }),
             )
             .with_local_identity(ApiKey::new("local", TenantId::new("acme").unwrap()).read_write());
+        let state = AppState::new(engine, auth)
+            .with_allowed_origins(["https://app.example.com".to_string()]);
         Self {
-            router: router(AppState::new(engine, auth)),
+            router: router(state.clone()),
+            state,
             _dir: dir,
+        }
+    }
+
+    /// Send a request with arbitrary headers and read the body as text.
+    async fn raw(
+        &self,
+        method: &str,
+        path: &str,
+        headers: &[(&str, &str)],
+        body: Option<Json>,
+    ) -> Raw {
+        let mut builder = Request::builder().method(method).uri(path);
+        for (name, value) in headers {
+            builder = builder.header(*name, *value);
+        }
+        let request = match body {
+            Some(body) => builder
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+            None => builder.body(Body::empty()).unwrap(),
+        };
+        let response = self.router.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        Raw {
+            status,
+            headers,
+            body: String::from_utf8_lossy(&bytes).into_owned(),
         }
     }
 
@@ -415,6 +473,205 @@ async fn mcp_over_http_is_the_same_server_as_stdio() {
     assert_eq!(status, StatusCode::ACCEPTED);
 }
 
+const AUTH: (&str, &str) = ("authorization", "Bearer writer-key");
+const ACCEPT_BOTH: (&str, &str) = ("accept", "application/json, text/event-stream");
+
+#[tokio::test]
+async fn streamable_http_answers_a_request_as_an_event_stream_when_accepted() {
+    let api = Api::new();
+    let raw = api
+        .raw(
+            "POST",
+            "/mcp",
+            &[AUTH, ACCEPT_BOTH],
+            Some(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" })),
+        )
+        .await;
+    assert_eq!(raw.status, StatusCode::OK);
+    assert!(
+        raw.header("content-type")
+            .unwrap()
+            .starts_with("text/event-stream"),
+        "{:?}",
+        raw.headers
+    );
+    assert!(raw.body.contains("event: message"), "{}", raw.body);
+    let messages = raw.sse_messages();
+    assert_eq!(messages.len(), 1, "{}", raw.body);
+    assert_eq!(messages[0]["id"], json!(1));
+    assert_eq!(messages[0]["result"]["tools"].as_array().unwrap().len(), 14);
+
+    // Without text/event-stream in Accept, the same request is plain JSON.
+    let raw = api
+        .raw(
+            "POST",
+            "/mcp",
+            &[AUTH, ("accept", "application/json")],
+            Some(json!({ "jsonrpc": "2.0", "id": 2, "method": "ping" })),
+        )
+        .await;
+    assert_eq!(raw.status, StatusCode::OK);
+    assert_eq!(raw.header("content-type"), Some("application/json"));
+    let body: Json = serde_json::from_str(&raw.body).unwrap();
+    assert_eq!(body["id"], json!(2));
+
+    // A client's response to a server request is acknowledged, not parsed.
+    let raw = api
+        .raw(
+            "POST",
+            "/mcp",
+            &[AUTH, ACCEPT_BOTH],
+            Some(json!({ "jsonrpc": "2.0", "id": 7, "result": {} })),
+        )
+        .await;
+    assert_eq!(raw.status, StatusCode::ACCEPTED);
+    assert!(raw.body.is_empty());
+}
+
+#[tokio::test]
+async fn streamable_http_sessions_are_issued_checked_and_ended() {
+    let api = Api::new();
+    let raw = api
+        .raw(
+            "POST",
+            "/mcp",
+            &[AUTH, ACCEPT_BOTH],
+            Some(json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                         "params": { "protocolVersion": "2025-06-18" } })),
+        )
+        .await;
+    assert_eq!(raw.status, StatusCode::OK);
+    let session = raw
+        .header("mcp-session-id")
+        .expect("initialize issues a session")
+        .to_string();
+    assert_eq!(
+        raw.sse_messages()[0]["result"]["protocolVersion"],
+        json!("2025-06-18")
+    );
+
+    let with_session = [
+        AUTH,
+        ACCEPT_BOTH,
+        ("mcp-session-id", session.as_str()),
+        ("mcp-protocol-version", "2025-06-18"),
+    ];
+    let raw = api
+        .raw(
+            "POST",
+            "/mcp",
+            &with_session,
+            Some(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })),
+        )
+        .await;
+    assert_eq!(raw.status, StatusCode::ACCEPTED);
+
+    let raw = api
+        .raw(
+            "POST",
+            "/mcp",
+            &[AUTH, ACCEPT_BOTH, ("mcp-session-id", "not-a-session")],
+            Some(json!({ "jsonrpc": "2.0", "id": 2, "method": "ping" })),
+        )
+        .await;
+    assert_eq!(raw.status, StatusCode::NOT_FOUND);
+
+    let raw = api.raw("DELETE", "/mcp", &[AUTH], None).await;
+    assert_eq!(
+        raw.status,
+        StatusCode::BAD_REQUEST,
+        "DELETE needs a session"
+    );
+
+    let raw = api.raw("DELETE", "/mcp", &with_session, None).await;
+    assert_eq!(raw.status, StatusCode::NO_CONTENT);
+
+    // An ended session is gone: the client must initialize again.
+    let raw = api
+        .raw(
+            "POST",
+            "/mcp",
+            &with_session,
+            Some(json!({ "jsonrpc": "2.0", "id": 3, "method": "ping" })),
+        )
+        .await;
+    assert_eq!(raw.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn streamable_http_get_streams_until_shutdown() {
+    let api = Api::new();
+
+    let raw = api.raw("GET", "/mcp", &[AUTH], None).await;
+    assert_eq!(raw.status, StatusCode::METHOD_NOT_ALLOWED);
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/mcp")
+        .header(AUTH.0, AUTH.1)
+        .header("accept", "text/event-stream")
+        .body(Body::empty())
+        .unwrap();
+    let response = api.router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers()["content-type"]
+        .to_str()
+        .unwrap()
+        .starts_with("text/event-stream"));
+
+    // The stream stays open until shutdown begins, then ends by itself, so a
+    // graceful stop is not held for the full drain timeout.
+    let body = tokio::spawn(axum::body::to_bytes(response.into_body(), usize::MAX));
+    api.state.begin_shutdown();
+    let finished = tokio::time::timeout(std::time::Duration::from_secs(5), body)
+        .await
+        .expect("the event stream should end on shutdown");
+    assert!(finished.unwrap().is_ok());
+}
+
+#[tokio::test]
+async fn streamable_http_refuses_foreign_origins_and_unknown_versions() {
+    let api = Api::new();
+    let ping = json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" });
+
+    let raw = api
+        .raw(
+            "POST",
+            "/mcp",
+            &[AUTH, ("origin", "https://evil.example")],
+            Some(ping.clone()),
+        )
+        .await;
+    assert_eq!(raw.status, StatusCode::FORBIDDEN, "{}", raw.body);
+
+    for origin in ["http://localhost:3000", "https://app.example.com"] {
+        let raw = api
+            .raw(
+                "POST",
+                "/mcp",
+                &[AUTH, ("origin", origin)],
+                Some(ping.clone()),
+            )
+            .await;
+        assert_eq!(raw.status, StatusCode::OK, "{origin}: {}", raw.body);
+    }
+
+    let raw = api
+        .raw(
+            "POST",
+            "/mcp",
+            &[AUTH, ("mcp-protocol-version", "1999-01-01")],
+            Some(ping.clone()),
+        )
+        .await;
+    assert_eq!(raw.status, StatusCode::BAD_REQUEST, "{}", raw.body);
+
+    // Authentication still applies to every message.
+    let raw = api.raw("POST", "/mcp", &[ACCEPT_BOTH], Some(ping)).await;
+    assert!(raw.status.is_client_error(), "{}", raw.status);
+    assert_ne!(raw.status, StatusCode::OK);
+}
+
 #[tokio::test]
 async fn the_tool_catalogue_is_discoverable() {
     let api = Api::new();
@@ -458,8 +715,10 @@ async fn tenants_are_isolated_across_keys() {
         .with_key(ApiKey::new("acme-key", TenantId::new("acme").unwrap()).read_write())
         .with_key(ApiKey::new("other-key", TenantId::new("othercorp").unwrap()).read_write())
         .with_local_identity(ApiKey::new("local", TenantId::new("acme").unwrap()).read_write());
+    let state = AppState::new(engine, auth);
     let api = Api {
-        router: router(AppState::new(engine, auth)),
+        router: router(state.clone()),
+        state,
         _dir: dir,
     };
 
