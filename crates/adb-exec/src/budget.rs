@@ -29,15 +29,9 @@ pub struct Budget {
 
 impl Budget {
     pub fn new(limits: QueryLimits) -> Self {
-        Self::started_at(limits, Instant::now())
-    }
-
-    /// A budget whose clock started at `started`. Lets tests put a query past
-    /// its deadline without depending on how fast the machine is.
-    pub fn started_at(limits: QueryLimits, started: Instant) -> Self {
         Self {
             limits,
-            started,
+            started: Instant::now(),
             bytes_scanned: AtomicU64::new(0),
             rows_scanned: AtomicU64::new(0),
             segments_read: AtomicU64::new(0),

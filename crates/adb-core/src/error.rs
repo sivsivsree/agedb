@@ -87,22 +87,6 @@ impl AdbError {
             Self::Internal(_) => "internal_error",
         }
     }
-
-    /// True when the caller can fix the request and retry.
-    pub fn is_client_error(&self) -> bool {
-        matches!(
-            self,
-            Self::InvalidIdentifier { .. }
-                | Self::InvalidSchema(_)
-                | Self::NotFound { .. }
-                | Self::AlreadyExists { .. }
-                | Self::BadRequest(_)
-                | Self::TypeMismatch { .. }
-                | Self::Unsupported(_)
-                | Self::PermissionDenied(_)
-                | Self::LimitExceeded { .. }
-        )
-    }
 }
 
 impl From<std::io::Error> for AdbError {

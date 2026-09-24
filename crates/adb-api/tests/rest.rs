@@ -673,6 +673,142 @@ async fn streamable_http_refuses_foreign_origins_and_unknown_versions() {
 }
 
 #[tokio::test]
+async fn streamable_http_sessions_belong_to_the_key_that_opened_them() {
+    let api = Api::new();
+    let raw = api
+        .raw(
+            "POST",
+            "/mcp",
+            &[AUTH],
+            Some(json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                         "params": { "protocolVersion": "2025-06-18" } })),
+        )
+        .await;
+    let session = raw.header("mcp-session-id").unwrap().to_string();
+    let ping = json!({ "jsonrpc": "2.0", "id": 2, "method": "ping" });
+
+    // Without credentials, a live session looks exactly like a missing one:
+    // authentication fails before the session is consulted.
+    let anonymous = api
+        .raw(
+            "POST",
+            "/mcp",
+            &[("mcp-session-id", session.as_str())],
+            Some(ping.clone()),
+        )
+        .await;
+    let anonymous_missing = api
+        .raw(
+            "POST",
+            "/mcp",
+            &[("mcp-session-id", "not-a-session")],
+            Some(ping.clone()),
+        )
+        .await;
+    assert_eq!(anonymous.status, anonymous_missing.status);
+    assert_ne!(anonymous.status, StatusCode::NOT_FOUND);
+
+    // Another key can neither use the session nor end it.
+    let other = ("authorization", "Bearer reader-key");
+    let raw = api
+        .raw(
+            "POST",
+            "/mcp",
+            &[other, ("mcp-session-id", session.as_str())],
+            Some(ping.clone()),
+        )
+        .await;
+    assert_eq!(raw.status, StatusCode::NOT_FOUND);
+    let raw = api
+        .raw(
+            "DELETE",
+            "/mcp",
+            &[other, ("mcp-session-id", session.as_str())],
+            None,
+        )
+        .await;
+    assert_eq!(raw.status, StatusCode::NOT_FOUND);
+
+    // The owner still can.
+    let raw = api
+        .raw(
+            "POST",
+            "/mcp",
+            &[AUTH, ("mcp-session-id", session.as_str())],
+            Some(ping),
+        )
+        .await;
+    assert_eq!(raw.status, StatusCode::OK, "{}", raw.body);
+}
+
+#[tokio::test]
+async fn streamable_http_answers_cors_for_allowed_origins_only() {
+    let api = Api::new();
+    let allowed = ("origin", "https://app.example.com");
+
+    let raw = api
+        .raw(
+            "OPTIONS",
+            "/mcp",
+            &[
+                allowed,
+                ("access-control-request-method", "POST"),
+                (
+                    "access-control-request-headers",
+                    "authorization, content-type",
+                ),
+            ],
+            None,
+        )
+        .await;
+    assert_eq!(raw.status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        raw.header("access-control-allow-origin"),
+        Some("https://app.example.com")
+    );
+    assert!(raw
+        .header("access-control-allow-headers")
+        .unwrap()
+        .contains("authorization"));
+    assert!(raw
+        .header("access-control-allow-methods")
+        .unwrap()
+        .contains("POST"));
+
+    let raw = api
+        .raw(
+            "OPTIONS",
+            "/mcp",
+            &[("origin", "https://evil.example")],
+            None,
+        )
+        .await;
+    assert_eq!(raw.status, StatusCode::FORBIDDEN);
+    assert!(raw.header("access-control-allow-origin").is_none());
+
+    // The real request exposes the session header to the page.
+    let raw = api
+        .raw(
+            "POST",
+            "/mcp",
+            &[AUTH, allowed],
+            Some(json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                         "params": { "protocolVersion": "2025-06-18" } })),
+        )
+        .await;
+    assert_eq!(raw.status, StatusCode::OK);
+    assert_eq!(
+        raw.header("access-control-allow-origin"),
+        Some("https://app.example.com")
+    );
+    assert_eq!(
+        raw.header("access-control-expose-headers"),
+        Some("mcp-session-id")
+    );
+    assert!(raw.header("mcp-session-id").is_some());
+}
+
+#[tokio::test]
 async fn the_tool_catalogue_is_discoverable() {
     let api = Api::new();
     let (status, body) = api.get("/v1/tools", None).await;

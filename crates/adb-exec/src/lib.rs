@@ -63,7 +63,7 @@ pub fn execute(
 ///
 /// The deadline is checked inside the scan and again at every stage boundary
 /// on the coordinator (after the scans, per merged partial, and before
-/// finishing, sorting and limiting), so no stage starts once time is up.
+/// finishing and sorting), so no expensive stage starts once time is up.
 pub fn execute_with_budget(
     plan: &PhysicalPlan,
     snapshots: &[Arc<PartitionSnapshot>],
@@ -91,8 +91,9 @@ pub fn execute_with_budget(
 
     let renamed = apply_rename(combined, plan)?;
     budget.check_deadline()?;
+    // No check after the sort: what remains is cheap, and failing a finished
+    // answer would only make the caller rerun the expensive part.
     let sorted = sort::sort_batch(&renamed, &plan.sort, plan.fetch_rows())?;
-    budget.check_deadline()?;
     let limited = apply_offset_limit(&sorted, plan, &budget, &mut warnings);
     let aligned = align_output(&limited, &plan.output)?;
 

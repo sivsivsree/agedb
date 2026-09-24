@@ -8,7 +8,7 @@ being shaped, and a careful pull request has a good chance of landing.
 ```bash
 git clone https://github.com/sivsivsree/agedb
 cd agedb
-cargo test --workspace     # 305 tests, about 15 seconds after the first build
+cargo test --workspace     # 308 tests, about 15 seconds after the first build
 examples/demo.sh           # the whole system end to end, about 40 seconds
 ```
 

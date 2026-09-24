@@ -64,10 +64,14 @@ transport, revision 2025-06-18:
 
 * A successful `initialize` returns an `Mcp-Session-Id` header. Sending it back is optional;
   sending an unknown or ended one gets `404`, which tells the client to initialize again.
-  Idle sessions are forgotten after an hour.
+  A session belongs to the API key that opened it: another key using or deleting it gets
+  the same `404`. Idle sessions are forgotten after an hour, and at most 10,000 are kept,
+  dropping the least recently used.
 * An `MCP-Protocol-Version` header naming a revision the server does not speak gets `400`.
 * An `Origin` header that is neither this machine nor an `--allow-origin` gets `403`. This is
   the DNS-rebinding defence the spec asks for; non-browser clients send no `Origin`.
+  Allowed origins get CORS: `OPTIONS` preflight is answered, and responses carry
+  `Access-Control-Allow-Origin` and expose `Mcp-Session-Id`, so a browser client works.
 * Every request still needs `Authorization: Bearer <key>`. A session is correlation, not
   authentication.
 
@@ -296,7 +300,7 @@ even `kill -9` loses nothing; a hard kill just makes the next start replay more 
 | `column "x" not found` | The error lists the columns that do exist. Call `table_describe` |
 | `unsupported` for a plain-language question | It needs a join or data the rules cannot express. Send a structured `plan` for one table, or split the question |
 | `403` on `/mcp` with `origin ... is not allowed` | A browser client on another origin. Add it with `--allow-origin` |
-| `404` on `/mcp` with `unknown or expired MCP session` | The server restarted or the session was ended or idle. Send `initialize` again |
+| `404` on `/mcp` for an `MCP session` | The server restarted, the session was ended or idle, or it was opened with a different key. Send `initialize` again |
 
 Raise the log level to see plans and timings:
 

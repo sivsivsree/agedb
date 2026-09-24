@@ -30,7 +30,7 @@ The last answer is the point. A system that answered from one table would return
 confident, incomplete number. AgeDB refuses, says why, and the agent can ask a narrower
 question.
 
-Status: v0.1, single node, 305 tests, written in Rust. AgeDB is a working name and may
+Status: v0.1, single node, 308 tests, written in Rust. AgeDB is a working name and may
 change.
 
 ## What it does, in plain words
@@ -216,6 +216,7 @@ An agent launches the process and talks JSON-RPC over the pipe:
 Two more behaviours matter:
 * `initialize` issues an `Mcp-Session-Id`.
 * Browser origins other than this machine are refused unless allowed with `--allow-origin`.
+  Allowed origins get CORS, so a browser client works.
 
 Every request still needs its API key.
 
@@ -453,7 +454,7 @@ Every change must keep these green. CI runs all of them on each pull request:
 ```bash
 cargo fmt --all --check                                   # formatting
 cargo clippy --workspace --all-targets -- -D warnings     # no warnings, at all
-cargo test --workspace                                    # 305 tests, about 15 seconds
+cargo test --workspace                                    # 308 tests, about 15 seconds
 examples/demo.sh                                          # end-to-end smoke test
 ```
 
@@ -480,8 +481,7 @@ What a contribution is expected to bring:
 
 Tests must be deterministic. Where data is generated, seed it (see `Rng` in
 `crates/adb-exec/tests/query.rs`), and never depend on wall-clock time. The natural language
-layer takes an injected clock, and the execution budget an injected start time, for exactly
-this reason.
+layer takes an injected clock for exactly this reason.
 
 ## Contributing
 

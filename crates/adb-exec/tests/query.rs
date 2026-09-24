@@ -595,7 +595,7 @@ fn the_deadline_is_checked_after_the_scan_not_only_inside_it() {
     .unwrap();
 
     let limits = QueryLimits {
-        max_execution_time_ms: 1_000,
+        max_execution_time_ms: 1,
         ..QueryLimits::unlimited()
     };
     let query = scan()
@@ -612,14 +612,17 @@ fn the_deadline_is_checked_after_the_scan_not_only_inside_it() {
     let plan = physical::build(&validated).unwrap();
     let snapshots = table.snapshots().unwrap();
 
-    // Well inside the budget, the empty answer comes back.
-    let fresh = execute_with_budget(&plan, &snapshots, Budget::new(limits)).unwrap();
+    // Without a time budget, the empty answer comes back.
+    let fresh =
+        execute_with_budget(&plan, &snapshots, Budget::new(QueryLimits::unlimited())).unwrap();
     assert_eq!(fresh.rows(), 0);
 
-    // Started a minute ago, with a one second budget: no stage may run.
-    let started = std::time::Instant::now() - std::time::Duration::from_secs(60);
-    let err =
-        execute_with_budget(&plan, &snapshots, Budget::started_at(limits, started)).unwrap_err();
+    // A one millisecond budget already spent before execution starts. The
+    // sleep guarantees at least that much has elapsed however fast the machine
+    // is, so no stage may run.
+    let spent = Budget::new(limits);
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let err = execute_with_budget(&plan, &snapshots, spent).unwrap_err();
     assert_eq!(err.code(), "limit_exceeded");
     assert!(err.to_string().contains("max_execution_time"), "{err}");
 }
