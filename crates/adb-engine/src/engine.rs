@@ -568,7 +568,6 @@ impl Engine {
     /// Run a query, from either a structured plan or natural language.
     pub fn query(&self, ctx: &RequestContext, source: QuerySource) -> Result<QueryOutcome> {
         ctx.require(Scope::DatabaseRead)?;
-        let warnings = Vec::new();
         let (plan_request, interpretation) = match source {
             QuerySource::Plan(plan) => (plan, None),
             QuerySource::Request(request) => {
@@ -582,15 +581,7 @@ impl Engine {
         let table_name = TableName::new(plan_request.table.clone())?;
         let schema = self.describe_table_for_query(ctx, &table_name)?;
         let ir = plan_request.to_ir()?;
-        self.run_plan(
-            ctx,
-            &table_name,
-            &schema,
-            &ir,
-            plan_request,
-            interpretation,
-            warnings,
-        )
+        self.run_plan(ctx, &table_name, &schema, &ir, plan_request, interpretation)
     }
 
     /// Schema lookup for a query. Uses `database:read` rather than
@@ -604,7 +595,6 @@ impl Engine {
         self.catalog.snapshot().table(&ctx.tenant, database, name)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn run_plan(
         &self,
         ctx: &RequestContext,
@@ -613,10 +603,9 @@ impl Engine {
         ir: &Query,
         plan_request: PlanRequest,
         interpretation: Option<String>,
-        mut warnings: Vec<String>,
     ) -> Result<QueryOutcome> {
         let validated = validate(ir, schema, &ctx.limits)?;
-        warnings.extend(validated.warnings.iter().cloned());
+        let mut warnings = validated.warnings.clone();
         let plan = physical::build(&validated)?;
         let table = self.table(ctx, name)?;
         let snapshots = table.snapshots()?;

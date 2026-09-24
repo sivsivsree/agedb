@@ -113,23 +113,18 @@ where
 }
 
 pub fn router(state: AppState) -> Router {
+    // MCP over Streamable HTTP. `/mcp` is the conventional path clients
+    // expect; `/v1/mcp` is kept for existing configurations. One method
+    // router serves both, so they cannot drift apart.
+    let mcp = post(mcp_http::post)
+        .get(mcp_http::get)
+        .delete(mcp_http::delete)
+        .options(mcp_http::options);
     Router::new()
         .route("/healthz", get(healthz))
         .route("/v1/tools", get(list_tools))
-        // MCP over Streamable HTTP. `/mcp` is the conventional path clients
-        // expect; `/v1/mcp` is kept for existing configurations.
-        .route(
-            "/mcp",
-            post(mcp_http::post)
-                .get(mcp_http::get)
-                .delete(mcp_http::delete),
-        )
-        .route(
-            "/v1/mcp",
-            post(mcp_http::post)
-                .get(mcp_http::get)
-                .delete(mcp_http::delete),
-        )
+        .route("/mcp", mcp.clone())
+        .route("/v1/mcp", mcp)
         .route("/v1/databases", get(list_databases).post(create_database))
         .route("/v1/databases/{database}", delete(delete_database))
         .route(

@@ -1,33 +1,36 @@
 # AgeDB
 
-
 [![CI](https://github.com/sivsivsree/agedb/actions/workflows/ci.yml/badge.svg)](https://github.com/sivsivsree/agedb/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.90%2B-orange.svg)](https://rustup.rs)
 
-<img src="./agedb.png"/>
+<img src="./agedb.png" alt="AgeDB logo"/>
 
-**An analytical database built for agents to use directly.** Columnar storage with a
-write-ahead log, a vectorized query engine, and MCP as a first-class interface, so an agent
-can create a table, load rows into it, and ask questions in plain language without ever
-generating SQL.
+**A database your AI agent can talk to, that tells you how it read the question and says
+so when it can't answer.**
+
+AI agents collect things as they work: leads, prices, support tickets, research notes.
+AgeDB gives them somewhere to keep those records and lets them ask questions in plain
+English, such as "which companies look most likely to convert?". It runs on your machine as
+one small program. There is no SQL to write, and no extra AI call is made to understand the
+question.
 
 ```
 Agent:  "Create a table for the leads I'm collecting."
 Agent:  "Store these 4,000 leads."
 Agent:  "Which companies look most likely to convert?"
-agedb:   acme 0.99, company 210 0.79, company 139 0.74, ...
+AgeDB:   acme 0.99, company 210 0.79, company 139 0.74, ...
          reading leads (grouped by company; avg(score); top 10)
 Agent:  "Which of these leads became customers?"
-agedb:   unsupported: that request spans 2 tables (customers and leads), which needs a
+AgeDB:   unsupported: that request spans 2 tables (customers and leads), which needs a
          join; v0.1 queries one table at a time
 ```
 
 The last answer is the point. A system that answered from one table would return a
-confident, incomplete number. agedb refuses, says why, and the agent can ask a narrower
+confident, incomplete number. AgeDB refuses, says why, and the agent can ask a narrower
 question.
 
-Status: v0.1, single node, 305 tests, written in Rust. `agedb` is a working name and may
+Status: v0.1, single node, 308 tests, written in Rust. AgeDB is a working name and may
 change.
 
 ## What it does, in plain words
@@ -47,12 +50,10 @@ change.
 **There is no language model inside.** Plain-language questions are parsed in-process by
 deterministic rules. That takes about 17 microseconds per question on a laptop (Apple M1,
 release build). The same question over the same schema always gives the same plan, and
-nothing is sent anywhere. The agent calling agedb is usually already a language model, so
-agedb does not add a second one to every question.
+nothing is sent anywhere. The agent calling AgeDB is usually already a language model, so
+AgeDB does not add a second one to every question.
 
-
-
-## Why this exists
+### Who it is for today
 
 There are two starting points. Neither is proven yet.
 
@@ -68,7 +69,7 @@ There are two starting points. Neither is proven yet.
 If an embedded database your agent already uses serves you well, that is a legitimate
 answer. See [How it compares](#how-it-compares).
 
-## What agedb guarantees, and what it does not
+## What AgeDB guarantees, and what it does not
 
 | Guaranteed | How |
 | --- | --- |
@@ -80,7 +81,7 @@ answer. See [How it compares](#how-it-compares).
 | A key does only what it is scoped to | `database:read`, `schema:write`, `data:insert` and so on live on the key, never in the request |
 | Result size and data read are bounded | Row and byte budgets are enforced inside execution. A truncated result says so |
 
-What agedb does **not** guarantee:
+What AgeDB does **not** guarantee:
 
 * **Business correctness.** A valid plan can still:
   * sum gross revenue when you meant net;
@@ -89,7 +90,7 @@ What agedb does **not** guarantee:
   * cover the wrong reporting period.
 
   Column descriptions and default aggregations reduce this, and the echoed plan is how you
-  catch it. agedb knows only the business definitions your schema states.
+  catch it. AgeDB knows only the business definitions your schema states.
 * **Column-level authorization.** `sensitive` hides a column from `select *`, from schema
   context and from error suggestions. Any key that may query the table can still select
   the column by name. Keep data a caller must never see in a separate table, database or
@@ -97,7 +98,7 @@ What agedb does **not** guarantee:
 * **A hard time limit.** The time budget is checked between batches and between execution
   stages. It is cooperative: a single sort or merge step already running finishes first, so
   a query can overrun its budget by the length of that step.
-* **High availability.** agedb v0.1 runs on a single node.
+* **High availability.** AgeDB v0.1 runs on a single node.
 
 ## How it compares
 
@@ -110,7 +111,7 @@ also direct competition:
 * [MotherDuck](https://motherduck.com) provides MCP access to DuckDB with read-only and
   read-write query tools.
 
-MCP plus analytics plus semantics is not, on its own, a reason to choose agedb.
+MCP plus analytics plus semantics is not, on its own, a reason to choose AgeDB.
 
 The bet is narrower:
 
@@ -129,7 +130,7 @@ what the [evidence plan](#evidence-and-next-steps) tests.
 
 ## Why its own storage engine?
 
-Most of what is distinctive about agedb sits above storage.
+Most of what is distinctive about AgeDB sits above storage.
 
 The engine exists for three reasons:
 * budgets are enforced inside execution: bytes are charged as segments open, and the
@@ -138,7 +139,7 @@ The engine exists for three reasons:
 * segment statistics make pruning visible in every response.
 
 Those are easier to guarantee when the executor is ours. That is a design reason, not
-evidence that users need it. Adopting agedb today also means adopting its recovery, upgrade
+evidence that users need it. Adopting AgeDB today also means adopting its recovery, upgrade
 and maintenance story, which is younger than any established database's.
 
 So the next experiment is to put the same validated interface over an established engine
@@ -215,6 +216,7 @@ An agent launches the process and talks JSON-RPC over the pipe:
 Two more behaviours matter:
 * `initialize` issues an `Mcp-Session-Id`.
 * Browser origins other than this machine are refused unless allowed with `--allow-origin`.
+  Allowed origins get CORS, so a browser client works.
 
 Every request still needs its API key.
 
@@ -382,7 +384,7 @@ against itself from change to change. Ingest is measured with WAL fsync off, and
 competitor run alongside it. They are useful for catching regressions. They prove nothing
 about adoption.
 
-The benchmark that matters is not built yet. It asks whether an agent using agedb completes
+The benchmark that matters is not built yet. It asks whether an agent using AgeDB completes
 real analytical tasks more accurately, cheaply and safely than the same agent using a
 well-configured alternative. The plan is to use the same model, the same data and the same
 task set on both sides, with equivalent metadata and reasonable configuration for the
@@ -398,13 +400,13 @@ The harness and the results will be published whichever way they come out.
 
 ## Evidence and next steps
 
-agedb has solid engineering and no customer evidence yet. No external team uses it every
+AgeDB has solid engineering and no customer evidence yet. No external team uses it every
 week. The next 30 days are about finding out whether one should, not about adding features.
 
 1. **Fix silent partial answers.** Done. The hosted-model translator was removed. It could
    answer a two-table question from one table. Multi-table questions are now refused.
 2. **Document the safety boundaries precisely.** Done: see
-   [what agedb does not guarantee](#what-agedb-guarantees-and-what-it-does-not).
+   [what AgeDB does not guarantee](#what-agedb-guarantees-and-what-it-does-not).
 3. **Recruit five external teams** that already have an agent-data problem.
 4. **Support one narrow workflow end to end**, starting with the local workspace for
    research and operations agents.
@@ -414,7 +416,7 @@ week. The next 30 days are about finding out whether one should, not about addin
 6. **Ask for a paid pilot** once that workflow is useful.
 
 The decision gate is:
-* at least three teams keep using agedb without repeated prompting;
+* at least three teams keep using AgeDB without repeated prompting;
 * there is a measurable advantage on their workloads;
 * one team is willing to pay.
 
@@ -452,7 +454,7 @@ Every change must keep these green. CI runs all of them on each pull request:
 ```bash
 cargo fmt --all --check                                   # formatting
 cargo clippy --workspace --all-targets -- -D warnings     # no warnings, at all
-cargo test --workspace                                    # 305 tests, about 15 seconds
+cargo test --workspace                                    # 308 tests, about 15 seconds
 examples/demo.sh                                          # end-to-end smoke test
 ```
 
@@ -479,8 +481,7 @@ What a contribution is expected to bring:
 
 Tests must be deterministic. Where data is generated, seed it (see `Rng` in
 `crates/adb-exec/tests/query.rs`), and never depend on wall-clock time. The natural language
-layer takes an injected clock, and the execution budget an injected start time, for exactly
-this reason.
+layer takes an injected clock for exactly this reason.
 
 ## Contributing
 

@@ -12,22 +12,33 @@
 //!   server shuts down.
 //! * `DELETE` ends a session.
 //!
+//! `OPTIONS` answers CORS preflight for browser origins that are allowed.
+//!
 //! Every request dispatches through the same [`adb_mcp::McpServer`] as stdio,
 //! so the transports cannot drift apart in what they allow. Sessions are
-//! correlation, not authentication: each request still carries its API key.
+//! correlation, not authentication: each request still carries its API key,
+//! and a session can only be used by the key that opened it.
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant};
 
-use adb_core::AdbError;
+use adb_core::{AdbError, RequestContext};
+use adb_mcp::JsonRpcRequest;
 use axum::extract::State;
-use axum::http::header::{ACCEPT, ALLOW, CONTENT_TYPE, ORIGIN};
+use axum::http::header::{
+    ACCEPT, ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
+    ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS, ACCESS_CONTROL_MAX_AGE, ALLOW,
+    AUTHORIZATION, CONTENT_TYPE, ORIGIN, VARY,
+};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use futures_util::stream;
-use serde_json::{json, Value as JsonValue};
+use serde::de::IgnoredAny;
+use serde::Deserialize;
 
 use crate::error::ApiError;
 use crate::rest::AppState;
@@ -37,64 +48,83 @@ pub const SESSION_HEADER: &str = "mcp-session-id";
 /// Header a client sends after initialization with the negotiated revision.
 pub const PROTOCOL_VERSION_HEADER: &str = "mcp-protocol-version";
 
-/// Sessions idle longer than this are forgotten, so clients that never send
-/// `DELETE` cannot grow the table without bound.
+/// Sessions idle longer than this are forgotten.
 const SESSION_IDLE: Duration = Duration::from_secs(60 * 60);
+/// At most this many live sessions. Past it, the least recently used one is
+/// dropped, so a client that re-initializes in a loop cannot grow memory
+/// without bound; its oldest sessions simply get `404` and re-initialize.
+const MAX_SESSIONS: usize = 10_000;
 /// How often an idle SSE stream sends a comment to keep proxies from closing it.
 const KEEP_ALIVE: Duration = Duration::from_secs(15);
 
-/// Known session identifiers and when each was last used.
+const ALLOWED_METHODS: &str = "GET, POST, DELETE, OPTIONS";
+const ALLOWED_HEADERS: &str =
+    "authorization, content-type, accept, mcp-session-id, mcp-protocol-version, last-event-id";
+
+/// A live session: which key opened it, and when it was last used.
+#[derive(Debug)]
+struct Session {
+    owner: u64,
+    last_used: Instant,
+}
+
+/// Known sessions, each bound to the API key that opened it.
 #[derive(Debug, Default)]
 pub struct Sessions {
-    seen: HashMap<String, Instant>,
+    live: HashMap<String, Session>,
 }
 
 impl Sessions {
-    fn open(&mut self) -> String {
+    fn open(&mut self, owner: u64) -> String {
         let now = Instant::now();
-        self.seen
-            .retain(|_, last| now.duration_since(*last) < SESSION_IDLE);
+        if self.live.len() >= MAX_SESSIONS {
+            self.live
+                .retain(|_, session| now.duration_since(session.last_used) < SESSION_IDLE);
+        }
+        if self.live.len() >= MAX_SESSIONS {
+            let oldest = self
+                .live
+                .iter()
+                .min_by_key(|(_, session)| session.last_used)
+                .map(|(id, _)| id.clone());
+            if let Some(oldest) = oldest {
+                self.live.remove(&oldest);
+            }
+        }
         let id = uuid::Uuid::new_v4().to_string();
-        self.seen.insert(id.clone(), now);
+        self.live.insert(
+            id.clone(),
+            Session {
+                owner,
+                last_used: now,
+            },
+        );
         id
     }
 
-    /// Mark `id` as used. `false` if it is unknown or expired.
-    fn touch(&mut self, id: &str) -> bool {
-        match self.seen.get_mut(id) {
-            Some(last) if last.elapsed() < SESSION_IDLE => {
-                *last = Instant::now();
+    /// Mark `id` as used by `owner`. `false` if it is unknown, expired, or
+    /// belongs to another key, which are deliberately indistinguishable.
+    fn touch(&mut self, id: &str, owner: u64) -> bool {
+        match self.live.get_mut(id) {
+            Some(session) if session.owner == owner => {
+                if session.last_used.elapsed() >= SESSION_IDLE {
+                    self.live.remove(id);
+                    return false;
+                }
+                session.last_used = Instant::now();
                 true
             }
             _ => false,
         }
     }
 
-    fn close(&mut self, id: &str) -> bool {
-        self.seen.remove(id).is_some()
+    fn close(&mut self, id: &str) {
+        self.live.remove(id);
     }
-}
 
-/// A transport-level refusal, answered before any JSON-RPC is read. Same body
-/// shape as every other API error.
-pub struct Refusal {
-    status: StatusCode,
-    code: &'static str,
-    message: String,
-}
-
-fn refuse(status: StatusCode, code: &'static str, message: impl Into<String>) -> Refusal {
-    Refusal {
-        status,
-        code,
-        message: message.into(),
-    }
-}
-
-impl IntoResponse for Refusal {
-    fn into_response(self) -> Response {
-        let body = json!({ "error": { "code": self.code, "message": self.message } });
-        (self.status, axum::Json(body)).into_response()
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.live.len()
     }
 }
 
@@ -108,78 +138,160 @@ fn accepts_event_stream(headers: &HeaderMap) -> bool {
         .unwrap_or(false)
 }
 
-/// Checks every method shares: origin, protocol revision, and a known session.
+/// Identifies the API key a request authenticated with, without keeping the
+/// key itself in the session table.
+fn key_fingerprint(headers: &HeaderMap) -> u64 {
+    let token = header(headers, AUTHORIZATION.as_str())
+        .map(|value| {
+            value
+                .strip_prefix("Bearer ")
+                .or_else(|| value.strip_prefix("bearer "))
+                .unwrap_or(value)
+                .trim()
+        })
+        .unwrap_or("");
+    let mut hasher = DefaultHasher::new();
+    token.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Checks every method shares, in order: origin, protocol revision,
+/// authentication, and then the session. The session is looked up only after
+/// authentication, so an anonymous caller learns nothing about which session
+/// identifiers exist and cannot keep one alive.
 ///
 /// A browser page on another site can reach a server bound to localhost, so an
 /// `Origin` that is neither local nor explicitly allowed is refused, which is
 /// the DNS-rebinding defence the transport spec asks for. Clients that are not
 /// browsers send no `Origin` and are unaffected.
-fn preflight(state: &AppState, headers: &HeaderMap) -> Result<Option<String>, Refusal> {
+fn admit(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<(RequestContext, Option<String>), ApiError> {
     if let Some(origin) = header(headers, ORIGIN.as_str()) {
         if !state.origin_allowed(origin) {
-            return Err(refuse(
-                StatusCode::FORBIDDEN,
-                "permission_denied",
-                format!("origin {origin:?} is not allowed; start the server with --allow-origin"),
-            ));
+            return Err(ApiError(AdbError::PermissionDenied(format!(
+                "an allowed origin ({origin:?} is not; start the server with --allow-origin)"
+            ))));
         }
     }
     if let Some(version) = header(headers, PROTOCOL_VERSION_HEADER) {
         if !adb_mcp::server::SUPPORTED_VERSIONS.contains(&version) {
-            return Err(refuse(
-                StatusCode::BAD_REQUEST,
-                "bad_request",
-                format!(
-                    "MCP protocol version {version:?} is not supported; this server speaks {}",
-                    adb_mcp::server::SUPPORTED_VERSIONS.join(", ")
-                ),
-            ));
+            return Err(ApiError(AdbError::bad_request(format!(
+                "MCP protocol version {version:?} is not supported; this server speaks {}",
+                adb_mcp::server::SUPPORTED_VERSIONS.join(", ")
+            ))));
         }
     }
+    let ctx = state.context(headers, None)?;
     let session = header(headers, SESSION_HEADER).map(str::to_string);
     if let Some(id) = &session {
-        if !state.sessions().touch(id) {
+        if !state.sessions().touch(id, key_fingerprint(headers)) {
             // 404 tells a client its session is gone and it should initialize again.
-            return Err(refuse(
-                StatusCode::NOT_FOUND,
-                "not_found",
-                "unknown or expired MCP session; send initialize again",
-            ));
+            return Err(ApiError(AdbError::not_found(
+                "MCP session (send initialize again)",
+                id,
+            )));
         }
     }
-    Ok(session)
+    Ok((ctx, session))
+}
+
+/// Add CORS headers for an allowed browser origin. Requests without an
+/// `Origin` are not from a browser and get none.
+fn with_cors(state: &AppState, headers: &HeaderMap, mut response: Response) -> Response {
+    let Some(origin) = header(headers, ORIGIN.as_str()) else {
+        return response;
+    };
+    if !state.origin_allowed(origin) {
+        return response;
+    }
+    let Ok(origin) = HeaderValue::from_str(origin) else {
+        return response;
+    };
+    let out = response.headers_mut();
+    out.insert(ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+    out.insert(
+        ACCESS_CONTROL_EXPOSE_HEADERS,
+        HeaderValue::from_static(SESSION_HEADER),
+    );
+    out.append(VARY, HeaderValue::from_static("origin"));
+    response
+}
+
+/// What a POST body turned out to be.
+enum Outcome {
+    /// Nothing to send back: a notification, or the client answering a
+    /// server request.
+    Accepted,
+    Reply {
+        line: String,
+        initialized: bool,
+    },
+}
+
+/// Just enough of a JSON-RPC message to recognize a client response, without
+/// materializing its payload.
+#[derive(Deserialize)]
+struct Envelope {
+    #[serde(default)]
+    result: Option<IgnoredAny>,
+    #[serde(default)]
+    error: Option<IgnoredAny>,
+}
+
+/// Parse and handle one POST body. Runs on a blocking thread: a body can be a
+/// large `data_insert`, and parsing it is CPU work.
+fn handle_post(state: &AppState, body: &str, ctx: &RequestContext) -> Outcome {
+    let request = match serde_json::from_str::<JsonRpcRequest>(body) {
+        Ok(request) => request,
+        Err(_) => {
+            // A message without a method is the client answering a server
+            // request. This server sends none, but the transport says to
+            // acknowledge them.
+            let is_response = serde_json::from_str::<Envelope>(body)
+                .map(|m| m.result.is_some() || m.error.is_some())
+                .unwrap_or(false);
+            if is_response {
+                return Outcome::Accepted;
+            }
+            // Anything else gets the same parse error stdio would send.
+            return match state.mcp.handle_line(body, ctx) {
+                Some(line) => Outcome::Reply {
+                    line,
+                    initialized: false,
+                },
+                None => Outcome::Accepted,
+            };
+        }
+    };
+    match state.mcp.handle(&request, ctx) {
+        None => Outcome::Accepted,
+        Some(response) => {
+            let initialized = request.method == "initialize" && response.error.is_none();
+            Outcome::Reply {
+                line: response.to_line(),
+                initialized,
+            }
+        }
+    }
 }
 
 /// `POST`: one JSON-RPC message in, one response (or an acknowledgement) out.
 pub async fn post(State(state): State<AppState>, headers: HeaderMap, body: String) -> Response {
-    if let Err(refusal) = preflight(&state, &headers) {
-        return refusal.into_response();
-    }
-    let ctx = match state.context(&headers, None) {
-        Ok(ctx) => ctx,
+    let response = post_inner(&state, &headers, body).await;
+    with_cors(&state, &headers, response)
+}
+
+async fn post_inner(state: &AppState, headers: &HeaderMap, body: String) -> Response {
+    let ctx = match admit(state, headers) {
+        Ok((ctx, _)) => ctx,
         Err(error) => return error.into_response(),
     };
-
-    // A message without a method is the client answering a server request.
-    // This server sends none, but the transport says to acknowledge them.
-    let parsed = serde_json::from_str::<JsonValue>(&body).ok();
-    let method = parsed
-        .as_ref()
-        .and_then(|message| message.get("method"))
-        .and_then(JsonValue::as_str)
-        .map(str::to_string);
-    if method.is_none() && parsed.as_ref().is_some_and(JsonValue::is_object) {
-        let is_response = parsed
-            .as_ref()
-            .is_some_and(|m| m.get("result").is_some() || m.get("error").is_some());
-        if is_response {
-            return StatusCode::ACCEPTED.into_response();
-        }
-    }
-
-    let mcp = state.mcp.clone();
-    let reply = match tokio::task::spawn_blocking(move || mcp.handle_line(&body, &ctx)).await {
-        Ok(reply) => reply,
+    let worker = state.clone();
+    let outcome = match tokio::task::spawn_blocking(move || handle_post(&worker, &body, &ctx)).await
+    {
+        Ok(outcome) => outcome,
         Err(error) => {
             return ApiError(AdbError::internal(format!(
                 "the request task failed: {error}"
@@ -187,18 +299,12 @@ pub async fn post(State(state): State<AppState>, headers: HeaderMap, body: Strin
             .into_response()
         }
     };
-    let Some(line) = reply else {
-        // A notification gets 202 with no body.
-        return StatusCode::ACCEPTED.into_response();
+    let (line, initialized) = match outcome {
+        Outcome::Accepted => return StatusCode::ACCEPTED.into_response(),
+        Outcome::Reply { line, initialized } => (line, initialized),
     };
 
-    let initialized = method.as_deref() == Some("initialize")
-        && serde_json::from_str::<JsonValue>(&line)
-            .ok()
-            .is_some_and(|reply| reply.get("result").is_some());
-    let new_session = initialized.then(|| state.sessions().open());
-
-    let mut response = if accepts_event_stream(&headers) {
+    let mut response = if accepts_event_stream(headers) {
         let event = Event::default().event("message").data(line);
         Sse::new(stream::once(async move { Ok::<_, Infallible>(event) })).into_response()
     } else {
@@ -209,7 +315,8 @@ pub async fn post(State(state): State<AppState>, headers: HeaderMap, body: Strin
         )
             .into_response()
     };
-    if let Some(id) = new_session {
+    if initialized {
+        let id = state.sessions().open(key_fingerprint(headers));
         if let Ok(value) = HeaderValue::from_str(&id) {
             response.headers_mut().insert(SESSION_HEADER, value);
         }
@@ -220,16 +327,18 @@ pub async fn post(State(state): State<AppState>, headers: HeaderMap, body: Strin
 /// `GET`: a server-to-client event stream, open until the client goes away or
 /// the server begins shutting down.
 pub async fn get(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Err(refusal) = preflight(&state, &headers) {
-        return refusal.into_response();
-    }
-    if let Err(error) = state.context(&headers, None) {
+    let response = get_inner(&state, &headers);
+    with_cors(&state, &headers, response)
+}
+
+fn get_inner(state: &AppState, headers: &HeaderMap) -> Response {
+    if let Err(error) = admit(state, headers) {
         return error.into_response();
     }
-    if !accepts_event_stream(&headers) {
+    if !accepts_event_stream(headers) {
         return (
             StatusCode::METHOD_NOT_ALLOWED,
-            [(ALLOW, HeaderValue::from_static("POST, DELETE"))],
+            [(ALLOW, HeaderValue::from_static(ALLOWED_METHODS))],
         )
             .into_response();
     }
@@ -249,23 +358,52 @@ pub async fn get(State(state): State<AppState>, headers: HeaderMap) -> Response 
 
 /// `DELETE`: the client is done with its session.
 pub async fn delete(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let session = match preflight(&state, &headers) {
-        Ok(session) => session,
-        Err(refusal) => return refusal.into_response(),
+    let response = delete_inner(&state, &headers);
+    with_cors(&state, &headers, response)
+}
+
+fn delete_inner(state: &AppState, headers: &HeaderMap) -> Response {
+    // `admit` has already checked that the session exists and belongs to
+    // this key, so another key cannot end it.
+    let session = match admit(state, headers) {
+        Ok((_, session)) => session,
+        Err(error) => return error.into_response(),
     };
-    if let Err(error) = state.context(&headers, None) {
-        return error.into_response();
-    }
     let Some(id) = session else {
-        return refuse(
-            StatusCode::BAD_REQUEST,
-            "bad_request",
-            format!("DELETE needs the {SESSION_HEADER} header"),
-        )
+        return ApiError(AdbError::bad_request(format!(
+            "DELETE needs the {SESSION_HEADER} header"
+        )))
         .into_response();
     };
     state.sessions().close(&id);
     StatusCode::NO_CONTENT.into_response()
+}
+
+/// `OPTIONS`: CORS preflight. A browser sends this before any request that
+/// carries `Authorization`, so without it no browser client could connect.
+pub async fn options(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Some(origin) = header(&headers, ORIGIN.as_str()) {
+        if !state.origin_allowed(origin) {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+    }
+    let response = (
+        StatusCode::NO_CONTENT,
+        [
+            (ALLOW, HeaderValue::from_static(ALLOWED_METHODS)),
+            (
+                ACCESS_CONTROL_ALLOW_METHODS,
+                HeaderValue::from_static(ALLOWED_METHODS),
+            ),
+            (
+                ACCESS_CONTROL_ALLOW_HEADERS,
+                HeaderValue::from_static(ALLOWED_HEADERS),
+            ),
+            (ACCESS_CONTROL_MAX_AGE, HeaderValue::from_static("600")),
+        ],
+    )
+        .into_response();
+    with_cors(&state, &headers, response)
 }
 
 /// Whether `origin` names this machine: `http://localhost:3000`,
@@ -309,12 +447,27 @@ mod tests {
     }
 
     #[test]
-    fn sessions_open_touch_and_close() {
+    fn a_session_belongs_to_the_key_that_opened_it() {
         let mut sessions = Sessions::default();
-        let id = sessions.open();
-        assert!(sessions.touch(&id));
-        assert!(!sessions.touch("not-a-session"));
-        assert!(sessions.close(&id));
-        assert!(!sessions.touch(&id));
+        let id = sessions.open(1);
+        assert!(sessions.touch(&id, 1));
+        assert!(!sessions.touch(&id, 2), "another key cannot use it");
+        assert!(!sessions.touch("not-a-session", 1));
+        sessions.close(&id);
+        assert!(!sessions.touch(&id, 1));
+    }
+
+    #[test]
+    fn the_session_table_is_bounded() {
+        let mut sessions = Sessions::default();
+        let first = sessions.open(1);
+        for _ in 0..MAX_SESSIONS + 50 {
+            sessions.open(1);
+        }
+        assert_eq!(sessions.len(), MAX_SESSIONS);
+        assert!(
+            !sessions.touch(&first, 1),
+            "the least recently used session makes room"
+        );
     }
 }

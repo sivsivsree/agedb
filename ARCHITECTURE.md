@@ -177,9 +177,12 @@ and answers a request as a one-event SSE stream when the client accepts `text/ev
 or as plain JSON otherwise. `GET` opens a server-to-client event stream, which carries only
 keep-alives today because the server has no unsolicited messages; it is closed as soon as
 graceful shutdown begins so it cannot hold the drain open. `initialize` issues an
-`Mcp-Session-Id`; an unknown one gets `404` and `DELETE` ends it. A foreign `Origin` is
-refused (DNS rebinding), and an unsupported `MCP-Protocol-Version` gets `400`. Sessions are
-correlation only: every request still authenticates with its API key.
+`Mcp-Session-Id` bound to the key that opened it; an unknown one, or one used by another
+key, gets `404`, and `DELETE` ends it. The session is checked only after authentication,
+so an anonymous caller cannot probe which sessions exist. The table is capped at 10,000
+sessions. A foreign `Origin` is refused (DNS rebinding), allowed origins get CORS, and an
+unsupported `MCP-Protocol-Version` gets `400`. Sessions are correlation only: every request
+still authenticates with its API key.
 
 **REST** mirrors the same operations for scripts and services.
 
@@ -342,9 +345,10 @@ opened, and a result that hits the row budget is truncated *and says so* in
 with a warning, rather than silently honoured or rejected.
 
 The deadline is checked before each segment and memtable batch in the scan, and again on
-the coordinator after the scans, per merged partial, and before finishing, sorting and
-limiting. It is cooperative, not a hard kill: a step already running, such as one sort,
-completes first, so a query can overrun by the length of that step.
+the coordinator after the scans, per merged partial, and before finishing and sorting.
+It is cooperative, not a hard kill: a step already running, such as one sort, completes
+first, so a query can overrun by the length of that step. A finished answer is not thrown
+away for running over during the cheap offset and limit step.
 
 `sensitive` is not access control. It keeps a column out of `select *`, out of schema
 context and out of error suggestions, but any key that may query the table can select the
@@ -354,7 +358,7 @@ tenant. Column-level authorization is not implemented.
 ## Verification
 
 ```bash
-cargo test --workspace          # 305 tests
+cargo test --workspace          # 308 tests
 cargo clippy --workspace --all-targets -- -D warnings
 examples/demo.sh                # the full agent story, end to end
 ```
