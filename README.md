@@ -1,17 +1,16 @@
-# agedb
+# AgeDB
+
 
 [![CI](https://github.com/sivsivsree/agedb/actions/workflows/ci.yml/badge.svg)](https://github.com/sivsivsree/agedb/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.90%2B-orange.svg)](https://rustup.rs)
 
-**A database your AI agent can talk to, that tells you how it read the question and says
-so when it can't answer.**
+<img src="./agedb.png"/>
 
-AI agents collect things as they work: leads, prices, support tickets, research notes.
-agedb gives them somewhere to keep those records and lets them ask questions in plain
-English, such as "which companies look most likely to convert?". It runs on your machine as
-one small program. There is no SQL to write, and no extra AI call is made to understand the
-question.
+**An analytical database built for agents to use directly.** Columnar storage with a
+write-ahead log, a vectorized query engine, and MCP as a first-class interface, so an agent
+can create a table, load rows into it, and ask questions in plain language without ever
+generating SQL.
 
 ```
 Agent:  "Create a table for the leads I'm collecting."
@@ -51,7 +50,9 @@ release build). The same question over the same schema always gives the same pla
 nothing is sent anywhere. The agent calling agedb is usually already a language model, so
 agedb does not add a second one to every question.
 
-### Who it is for today
+
+
+## Why this exists
 
 There are two starting points. Neither is proven yet.
 
