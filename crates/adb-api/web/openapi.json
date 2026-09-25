@@ -1,0 +1,250 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AgenticDB API",
+    "description": "Agent-native analytical database with columnar storage, vectorized query execution, and semantic schemas.",
+    "version": "0.1.0"
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8080",
+      "description": "Local AgenticDB Instance"
+    }
+  ],
+  "paths": {
+    "/healthz": {
+      "get": {
+        "summary": "Check server health",
+        "operationId": "checkHealth",
+        "responses": {
+          "200": {
+            "description": "Server health status"
+          }
+        }
+      }
+    },
+    "/v1/databases": {
+      "get": {
+        "summary": "List all databases",
+        "operationId": "listDatabases",
+        "responses": {
+          "200": {
+            "description": "List of available databases"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create a new database",
+        "operationId": "createDatabase",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["database"],
+                "properties": {
+                  "database": {
+                    "type": "string",
+                    "description": "Name of database to create"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Database created successfully"
+          }
+        }
+      }
+    },
+    "/v1/databases/{database}/tables": {
+      "get": {
+        "summary": "List tables in a database",
+        "operationId": "listTables",
+        "parameters": [
+          {
+            "name": "database",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of tables with row counts and column counts"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create a table with semantic schema",
+        "operationId": "createTable",
+        "parameters": [
+          {
+            "name": "database",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["table", "columns"],
+                "properties": {
+                  "table": { "type": "string" },
+                  "description": { "type": "string" },
+                  "primary_key": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "columns": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["name", "type"],
+                      "properties": {
+                        "name": { "type": "string" },
+                        "type": { "type": "string", "enum": ["int64", "float64", "utf8", "boolean", "timestamp"] },
+                        "nullable": { "type": "boolean" },
+                        "semantic_type": { "type": "string" },
+                        "description": { "type": "string" },
+                        "currency": { "type": "string" },
+                        "unit": { "type": "string" },
+                        "default_aggregate": { "type": "string" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Table created" }
+        }
+      }
+    },
+    "/v1/databases/{database}/tables/{table}": {
+      "get": {
+        "summary": "Describe table schema and metrics",
+        "operationId": "describeTable",
+        "parameters": [
+          {
+            "name": "database",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "table",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Table schema" }
+        }
+      }
+    },
+    "/v1/databases/{database}/tables/{table}/rows": {
+      "post": {
+        "summary": "Insert rows into a table",
+        "operationId": "insertRows",
+        "parameters": [
+          {
+            "name": "database",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "table",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["rows"],
+                "properties": {
+                  "rows": {
+                    "type": "array",
+                    "items": { "type": "object" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Rows written" }
+        }
+      }
+    },
+    "/v1/databases/{database}/query": {
+      "post": {
+        "summary": "Query data using plain language or structured plan",
+        "operationId": "queryData",
+        "parameters": [
+          {
+            "name": "database",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "request": {
+                    "type": "string",
+                    "description": "Question in plain English, e.g. 'top 5 products by revenue in the last 30 days'"
+                  },
+                  "plan": {
+                    "type": "object",
+                    "description": "Structured JSON plan for exact control"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Query outcome with rows, telemetry stats, and interpretation"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "API Key"
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ]
+}

@@ -89,7 +89,21 @@
     btnCloseDrawer: document.getElementById('btn-close-drawer'),
     drawerKeyBadge: document.getElementById('drawer-key-badge'),
     drawerFields: document.getElementById('drawer-fields'),
-    drawerRawJson: document.getElementById('drawer-raw-json')
+    drawerRawJson: document.getElementById('drawer-raw-json'),
+
+    // Connect AI Modal
+    btnConnectAi: document.getElementById('btn-connect-ai'),
+    aiModal: document.getElementById('ai-modal'),
+    btnCloseAiModal: document.getElementById('btn-close-ai-modal'),
+    aiTabChatgpt: document.getElementById('ai-tab-chatgpt'),
+    aiTabMcp: document.getElementById('ai-tab-mcp'),
+    aiContentChatgpt: document.getElementById('ai-content-chatgpt'),
+    aiContentMcp: document.getElementById('ai-content-mcp'),
+    chatgptSchemaUrl: document.getElementById('chatgpt-schema-url'),
+    btnCopySchemaUrl: document.getElementById('btn-copy-schema-url'),
+    btnCopyRawOpenapi: document.getElementById('btn-copy-raw-openapi'),
+    btnCopyMcpConfig: document.getElementById('btn-copy-mcp-config'),
+    mcpConfigCode: document.getElementById('mcp-config-code')
   };
 
   // Helper: API Fetch wrapper
@@ -692,6 +706,71 @@
       checkHealth();
       loadDatabases();
     });
+
+    // Connect AI Assistant Modal Listeners
+    if (el.btnConnectAi) {
+      el.btnConnectAi.addEventListener('click', () => {
+        const origin = window.location.origin;
+        if (el.chatgptSchemaUrl) {
+          el.chatgptSchemaUrl.value = origin + '/openapi.json';
+        }
+        el.aiModal.classList.remove('hidden');
+      });
+    }
+
+    if (el.btnCloseAiModal) {
+      el.btnCloseAiModal.addEventListener('click', () => {
+        el.aiModal.classList.add('hidden');
+      });
+    }
+
+    if (el.aiTabChatgpt && el.aiTabMcp) {
+      el.aiTabChatgpt.addEventListener('click', () => {
+        el.aiTabChatgpt.classList.add('active');
+        el.aiTabMcp.classList.remove('active');
+        el.aiContentChatgpt.classList.remove('hidden');
+        el.aiContentMcp.classList.add('hidden');
+      });
+
+      el.aiTabMcp.addEventListener('click', () => {
+        el.aiTabMcp.classList.add('active');
+        el.aiTabChatgpt.classList.remove('active');
+        el.aiContentMcp.classList.remove('hidden');
+        el.aiContentChatgpt.classList.add('hidden');
+      });
+    }
+
+    if (el.btnCopySchemaUrl) {
+      el.btnCopySchemaUrl.addEventListener('click', async () => {
+        await navigator.clipboard.writeText(el.chatgptSchemaUrl.value);
+        const orig = el.btnCopySchemaUrl.textContent;
+        el.btnCopySchemaUrl.textContent = 'Copied!';
+        setTimeout(() => { el.btnCopySchemaUrl.textContent = orig; }, 1500);
+      });
+    }
+
+    if (el.btnCopyRawOpenapi) {
+      el.btnCopyRawOpenapi.addEventListener('click', async () => {
+        try {
+          const res = await api('/openapi.json');
+          await navigator.clipboard.writeText(JSON.stringify(res, null, 2));
+          const orig = el.btnCopyRawOpenapi.textContent;
+          el.btnCopyRawOpenapi.textContent = 'Copied JSON!';
+          setTimeout(() => { el.btnCopyRawOpenapi.textContent = orig; }, 1500);
+        } catch (e) {
+          alert('Failed to copy schema: ' + e.message);
+        }
+      });
+    }
+
+    if (el.btnCopyMcpConfig && el.mcpConfigCode) {
+      el.btnCopyMcpConfig.addEventListener('click', async () => {
+        await navigator.clipboard.writeText(el.mcpConfigCode.textContent.trim());
+        const orig = el.btnCopyMcpConfig.textContent;
+        el.btnCopyMcpConfig.textContent = 'Copied!';
+        setTimeout(() => { el.btnCopyMcpConfig.textContent = orig; }, 1500);
+      });
+    }
   }
 
   // App Bootstrap

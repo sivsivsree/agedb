@@ -127,6 +127,8 @@ pub fn router(state: AppState) -> Router {
         .route("/ui/index.html", get(ui_index))
         .route("/ui/app.css", get(ui_css))
         .route("/ui/app.js", get(ui_js))
+        .route("/openapi.json", get(openapi_spec))
+        .route("/.well-known/ai-plugin.json", get(ai_plugin_manifest))
         .route("/healthz", get(healthz))
         .route("/v1/tools", get(list_tools))
         .route("/mcp", mcp.clone())
@@ -487,5 +489,22 @@ async fn ui_js() -> impl IntoResponse {
             "application/javascript; charset=utf-8",
         )],
         UI_JS,
+    )
+}
+
+const OPENAPI_SPEC: &str = include_str!("../web/openapi.json");
+const AI_PLUGIN_MANIFEST: &str = include_str!("../web/ai-plugin.json");
+
+async fn openapi_spec() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+        OPENAPI_SPEC,
+    )
+}
+
+async fn ai_plugin_manifest() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+        AI_PLUGIN_MANIFEST,
     )
 }

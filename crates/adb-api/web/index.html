@@ -39,6 +39,12 @@
           <span class="status-dot"></span>
           <span id="health-status-text" class="status-text">Online</span>
         </div>
+        <button id="btn-connect-ai" class="btn btn-secondary btn-icon-text" title="Connect to ChatGPT, Claude Desktop, Cursor">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+          </svg>
+          Connect AI
+        </button>
         <button id="btn-settings" class="btn btn-secondary btn-icon-text" title="Configure API Key and Tenant">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="3"></circle>
@@ -309,6 +315,73 @@
         </div>
         <div class="modal-footer">
           <button id="btn-save-auth" class="btn btn-primary">Save & Reconnect</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Connect AI Assistant Modal -->
+    <div id="ai-modal" class="modal-overlay hidden">
+      <div class="modal-card modal-lg">
+        <div class="modal-header">
+          <h3 class="modal-title">Connect AI Agents & Assistants</h3>
+          <button id="btn-close-ai-modal" class="btn-icon">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="modal-tabs">
+            <button id="ai-tab-chatgpt" class="modal-tab-btn active" data-tab="chatgpt">ChatGPT (Actions / Custom GPT)</button>
+            <button id="ai-tab-mcp" class="modal-tab-btn" data-tab="mcp">Claude Desktop & Cursor (MCP)</button>
+          </div>
+
+          <!-- ChatGPT Section -->
+          <div id="ai-content-chatgpt" class="ai-tab-content active">
+            <p class="ai-desc">Connect AgenticDB as a direct plugin action into ChatGPT.</p>
+            <div class="form-group">
+              <label class="form-label">1. Automatic Schema URL (OpenAPI 3.1):</label>
+              <div class="copy-input-row">
+                <input type="text" id="chatgpt-schema-url" class="form-input font-mono" readonly value="http://127.0.0.1:8080/openapi.json">
+                <button id="btn-copy-schema-url" class="btn btn-secondary">Copy URL</button>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">2. Or Copy Raw OpenAPI Specification:</label>
+              <button id="btn-copy-raw-openapi" class="btn btn-secondary btn-sm" style="width:fit-content">Copy Full OpenAPI JSON</button>
+            </div>
+            <div class="setup-steps">
+              <span class="step-title">How to use in ChatGPT:</span>
+              <ol class="step-list">
+                <li>Go to ChatGPT -&gt; <strong>Explore GPTs</strong> -&gt; <strong>Create</strong> -&gt; <strong>Configure</strong>.</li>
+                <li>Scroll to <strong>Actions</strong> -&gt; click <strong>Create new action</strong>.</li>
+                <li>Click <strong>Import from URL</strong>, paste the schema URL above (or paste the JSON).</li>
+                <li>Under Authentication, select <strong>API Key</strong> -&gt; <strong>Bearer</strong> -&gt; enter your key.</li>
+              </ol>
+            </div>
+          </div>
+
+          <!-- Claude Desktop / Cursor Section -->
+          <div id="ai-content-mcp" class="ai-tab-content hidden">
+            <p class="ai-desc">Connect AgenticDB as an MCP server to Claude Desktop, Cursor, or Antigravity.</p>
+            <div class="form-group">
+              <div class="header-with-action">
+                <label class="form-label">MCP Stdio Configuration:</label>
+                <button id="btn-copy-mcp-config" class="btn btn-secondary btn-sm">Copy JSON</button>
+              </div>
+              <pre id="mcp-config-code" class="json-pre font-mono">{
+  "mcpServers": {
+    "agedb": {
+      "command": "agedb",
+      "args": ["serve", "--transport", "stdio", "--tenant", "local"]
+    }
+  }
+}</pre>
+            </div>
+            <div class="setup-steps">
+              <span class="step-title">Configuration File Locations:</span>
+              <ul class="step-list">
+                <li><strong>Claude Desktop (macOS):</strong> <code class="font-mono">~/Library/Application Support/Claude/claude_desktop_config.json</code></li>
+                <li><strong>Cursor:</strong> <code class="font-mono">~/.cursor/mcp.json</code> or Settings -&gt; Features -&gt; MCP</li>
+              </ul>
+            </div>
+          </div>
         </div>
       </div>
     </div>
