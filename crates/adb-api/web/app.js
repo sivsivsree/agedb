@@ -10,7 +10,7 @@
     currentDatabase: '',
     currentTable: '',
     currentSchema: null,
-    browseLimit: 50,
+    browseLimit: 100,
     browseOffset: 0,
     browseRows: [],
     browseTotalCount: 0,
@@ -282,14 +282,38 @@
   async function loadTableData() {
     if (!state.currentDatabase || !state.currentTable) return;
 
+    // Fetch total row count (answered in 0 ms from segment metadata)
+    try {
+      const countRes = await api('/v1/databases/' + encodeURIComponent(state.currentDatabase) + '/query', {
+        method: 'POST',
+        body: JSON.stringify({
+          plan: {
+            operation: 'aggregate',
+            table: state.currentTable,
+            metrics: [{ function: 'count' }]
+          }
+        })
+      });
+      if (countRes.rows && countRes.rows.length > 0) {
+        state.browseTotalCount = countRes.rows[0].count != null ? countRes.rows[0].count : (countRes.rows[0].count_star || 0);
+      }
+    } catch (_) {}
+
+    const isAll = state.browseLimit === 'all';
     const plan = {
-      table: state.currentTable,
-      limit: state.browseLimit,
-      offset: state.browseOffset
+      operation: 'select',
+      table: state.currentTable
     };
 
+    if (!isAll && typeof state.browseLimit === 'number') {
+      plan.limit = state.browseLimit;
+    }
+    if (!isAll && state.browseOffset > 0) {
+      plan.offset = state.browseOffset;
+    }
+
     if (state.sortColumn) {
-      plan.sort = [{
+      plan.order_by = [{
         column: state.sortColumn,
         direction: state.sortDirection
       }];
@@ -306,13 +330,23 @@
       renderBrowseGrid(state.browseRows, outcome.schema);
 
       const count = state.browseRows.length;
-      el.tableRowCountChip.textContent = count + ' rows loaded';
+      if (isAll) {
+        el.tableRowCountChip.textContent = `All ${count.toLocaleString()} rows`;
+        el.paginationPageDisplay.textContent = 'All rows';
+        el.btnPagePrev.disabled = true;
+        el.btnPageNext.disabled = true;
+      } else {
+        const total = Math.max(state.browseTotalCount, count);
+        const start = total === 0 ? 0 : state.browseOffset + 1;
+        const end = Math.min(state.browseOffset + count, total);
+        el.tableRowCountChip.textContent = `${start}-${end} of ${total.toLocaleString()} rows`;
 
-      // Update Pagination state
-      const page = Math.floor(state.browseOffset / state.browseLimit) + 1;
-      el.paginationPageDisplay.textContent = 'Page ' + page;
-      el.btnPagePrev.disabled = state.browseOffset === 0;
-      el.btnPageNext.disabled = count < state.browseLimit;
+        const page = Math.floor(state.browseOffset / state.browseLimit) + 1;
+        const totalPages = Math.max(1, Math.ceil(total / state.browseLimit));
+        el.paginationPageDisplay.textContent = `Page ${page} of ${totalPages}`;
+        el.btnPagePrev.disabled = state.browseOffset === 0;
+        el.btnPageNext.disabled = end >= total;
+      }
     } catch (err) {
       el.dataGridBody.innerHTML = `<tr><td class="cell-empty" style="color:var(--accent-red)">Error: ${escapeHtml(err.message)}</td></tr>`;
     }
@@ -572,21 +606,24 @@
 
     // Data browser pagination and limit
     el.browseLimitSelect.addEventListener('change', (e) => {
-      state.browseLimit = parseInt(e.target.value, 10);
+      const val = e.target.value;
+      state.browseLimit = val === 'all' ? 'all' : parseInt(val, 10);
       state.browseOffset = 0;
       loadTableData();
     });
 
     el.btnPagePrev.addEventListener('click', () => {
-      if (state.browseOffset >= state.browseLimit) {
+      if (typeof state.browseLimit === 'number' && state.browseOffset >= state.browseLimit) {
         state.browseOffset -= state.browseLimit;
         loadTableData();
       }
     });
 
     el.btnPageNext.addEventListener('click', () => {
-      state.browseOffset += state.browseLimit;
-      loadTableData();
+      if (typeof state.browseLimit === 'number') {
+        state.browseOffset += state.browseLimit;
+        loadTableData();
+      }
     });
 
     el.btnRefreshData.addEventListener('click', () => loadTableData());
