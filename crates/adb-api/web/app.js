@@ -175,7 +175,17 @@
     try {
       el.tablesList.innerHTML = '<div class="empty-state">Loading tables...</div>';
       const res = await api('/v1/databases/' + encodeURIComponent(state.currentDatabase) + '/tables');
-      state.tables = res.tables || [];
+
+      const rawList = res.tables || [];
+      state.tableMeta = {};
+      state.tables = rawList.map(t => {
+        if (typeof t === 'string') {
+          return t;
+        }
+        const name = t.table || t.name;
+        state.tableMeta[name] = t;
+        return name;
+      });
 
       if (state.tables.length === 0) {
         el.tablesList.innerHTML = '<div class="empty-state">No tables in database</div>';
@@ -187,8 +197,11 @@
 
       el.tablesList.innerHTML = '';
       state.tables.forEach(tableName => {
+        const meta = state.tableMeta[tableName];
+        const rowCount = meta && meta.rows != null ? meta.rows : null;
         const item = document.createElement('div');
         item.className = 'sidebar-item' + (tableName === state.currentTable ? ' active' : '');
+        item.dataset.table = tableName;
         item.innerHTML = `
           <div class="sidebar-item-name">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -198,6 +211,7 @@
             </svg>
             <span>${escapeHtml(tableName)}</span>
           </div>
+          ${rowCount != null ? `<span class="chip chip-dim" style="font-size:10px">${rowCount.toLocaleString()}</span>` : ''}
         `;
         item.addEventListener('click', () => selectTable(tableName));
         el.tablesList.appendChild(item);
@@ -205,6 +219,8 @@
 
       if (!state.currentTable || !state.tables.includes(state.currentTable)) {
         selectTable(state.tables[0]);
+      } else {
+        selectTable(state.currentTable);
       }
     } catch (err) {
       el.tablesList.innerHTML = `<div class="empty-state">Error: ${escapeHtml(err.message)}</div>`;
@@ -213,29 +229,34 @@
 
   // Select Table
   async function selectTable(tableName) {
+    if (!tableName || typeof tableName !== 'string') return;
     state.currentTable = tableName;
     state.browseOffset = 0;
     state.sortColumn = null;
 
     // Update active highlight in sidebar
     document.querySelectorAll('.sidebar-item').forEach(item => {
-      const name = item.querySelector('span')?.textContent;
+      const name = item.dataset.table;
       item.classList.toggle('active', name === tableName);
     });
 
     el.activeTableTitle.textContent = tableName;
     el.schemaTableName.textContent = tableName + ' Schema';
 
-    // Fetch Table Schema
+    // Fetch Table Schema and stats
     try {
       const res = await api('/v1/databases/' + encodeURIComponent(state.currentDatabase) + '/tables/' + encodeURIComponent(tableName));
       state.currentSchema = res.schema || res;
+      if (res.stats && res.stats.rows != null) {
+        state.browseTotalCount = res.stats.rows;
+      }
       renderSchemaView(state.currentSchema);
 
       // Pre-fill query template with this table
       el.queryPlanText.value = JSON.stringify({
+        operation: 'select',
         table: tableName,
-        limit: 25
+        limit: 100
       }, null, 2);
 
       await loadTableData();
