@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AgenticDB - Data Browser & Control Panel</title>
+  <link rel="stylesheet" href="/ui/app.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body class="dark-theme">
+  <div id="app" class="app-layout">
+    <!-- Top Navigation Bar -->
+    <header class="topbar">
+      <div class="topbar-brand">
+        <div class="logo-badge">AGDB</div>
+        <div class="brand-text">
+          <span class="brand-title">AgenticDB</span>
+          <span class="brand-subtitle">Data Browser</span>
+        </div>
+      </div>
+
+      <div class="topbar-context">
+        <div class="context-item">
+          <span class="context-label">Database:</span>
+          <select id="database-select" class="dropdown-select" title="Active database">
+            <option value="">(Loading databases...)</option>
+          </select>
+        </div>
+        <div class="context-item">
+          <span class="context-label">Tenant:</span>
+          <span id="active-tenant-badge" class="badge badge-tenant">local</span>
+        </div>
+      </div>
+
+      <div class="topbar-actions">
+        <div id="health-indicator" class="status-indicator online" title="Server status: Connected">
+          <span class="status-dot"></span>
+          <span id="health-status-text" class="status-text">Online</span>
+        </div>
+        <button id="btn-settings" class="btn btn-secondary btn-icon-text" title="Configure API Key and Tenant">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+          Auth Settings
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Workspace Layout -->
+    <div class="workspace-body">
+      <!-- Left Sidebar: Databases and Tables Tree -->
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <span class="sidebar-title">Tables</span>
+          <button id="btn-refresh-tables" class="btn-icon" title="Refresh Tables">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M23 4v6h-6"></path>
+              <path d="M1 20v-6h6"></path>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+            </svg>
+          </button>
+        </div>
+
+        <div id="tables-list" class="sidebar-list">
+          <div class="empty-state">Select or create a database</div>
+        </div>
+
+        <div class="sidebar-footer">
+          <div class="system-stat">
+            <span class="stat-name">Catalog Epoch:</span>
+            <span id="catalog-epoch-val" class="stat-val">-</span>
+          </div>
+          <div class="system-stat">
+            <span class="stat-name">NL Engine:</span>
+            <span id="nl-engine-val" class="stat-val">-</span>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Center Main Content -->
+      <main class="content-area">
+        <!-- Navigation Tabs -->
+        <nav class="view-tabs">
+          <button id="tab-btn-browse" class="tab-btn active" data-tab="browse">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="3" y1="9" x2="21" y2="9"></line>
+              <line x1="9" y1="21" x2="9" y2="9"></line>
+            </svg>
+            Data Browser
+          </button>
+          <button id="tab-btn-query" class="tab-btn" data-tab="query">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+            Query Console
+          </button>
+          <button id="tab-btn-schema" class="tab-btn" data-tab="schema">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
+              <polyline points="10 9 9 9 8 9"></polyline>
+            </svg>
+            Schema & Semantics
+          </button>
+        </nav>
+
+        <!-- Tab 1: Data Browser View -->
+        <section id="view-browse" class="tab-content active">
+          <!-- Control Bar for Data Browser -->
+          <div class="data-toolbar">
+            <div class="table-info-chip">
+              <span id="active-table-title" class="table-title">Select a table</span>
+              <span id="table-row-count-chip" class="chip chip-dim">0 rows</span>
+            </div>
+
+            <div class="toolbar-controls">
+              <button id="btn-refresh-data" class="btn btn-secondary btn-sm" title="Refresh Table Data">
+                Refresh
+              </button>
+              <div class="pagination-controls">
+                <span class="pagination-label">Rows:</span>
+                <select id="browse-limit-select" class="dropdown-select dropdown-sm">
+                  <option value="25">25</option>
+                  <option value="50" selected>50</option>
+                  <option value="100">100</option>
+                  <option value="250">250</option>
+                </select>
+                <button id="btn-page-prev" class="btn btn-secondary btn-sm" disabled>&larr;</button>
+                <span id="pagination-page-display" class="page-display">Page 1</span>
+                <button id="btn-page-next" class="btn btn-secondary btn-sm" disabled>&rarr;</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Spreadsheet Table Container -->
+          <div class="table-wrapper">
+            <table id="data-grid" class="spreadsheet-grid">
+              <thead id="data-grid-head">
+                <tr>
+                  <th class="cell-empty">No table selected</th>
+                </tr>
+              </thead>
+              <tbody id="data-grid-body">
+                <tr>
+                  <td class="cell-empty">Select a table from the sidebar to inspect data.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- Tab 2: Query Console View -->
+        <section id="view-query" class="tab-content">
+          <div class="query-panel">
+            <div class="query-header">
+              <div class="query-mode-switch">
+                <button id="btn-query-mode-nl" class="mode-btn active" data-mode="nl">Plain Language</button>
+                <button id="btn-query-mode-plan" class="mode-btn" data-mode="plan">Structured Plan (JSON)</button>
+              </div>
+              <div class="query-actions">
+                <button id="btn-explain-query" class="btn btn-secondary">Explain Plan</button>
+                <button id="btn-run-query" class="btn btn-primary">Execute Query</button>
+              </div>
+            </div>
+
+            <!-- Natural Language Query Box -->
+            <div id="query-input-nl-box" class="query-box">
+              <textarea id="query-nl-text" class="query-textarea" rows="3" placeholder="Ask a question in plain language, e.g. 'total revenue by country in the last 30 days' or 'top 10 customers by score'"></textarea>
+            </div>
+
+            <!-- Structured JSON Plan Box -->
+            <div id="query-input-plan-box" class="query-box hidden">
+              <textarea id="query-plan-text" class="query-textarea font-mono" rows="8" placeholder='{
+  "table": "orders",
+  "aggregates": [{ "func": "sum", "column": "amount" }],
+  "group_by": ["country"],
+  "sort": [{ "column": "sum_amount", "direction": "desc" }],
+  "limit": 10
+}'></textarea>
+            </div>
+
+            <!-- Query Feedback / Warnings / Telemetry -->
+            <div id="query-feedback" class="query-feedback hidden">
+              <div id="query-interpretation-box" class="feedback-item interpretation-box hidden">
+                <span class="feedback-badge">Understood as:</span>
+                <span id="query-interpretation-text" class="feedback-text"></span>
+              </div>
+              <div id="query-warnings-box" class="feedback-item warnings-box hidden">
+                <span class="feedback-badge warning-badge">Notice:</span>
+                <span id="query-warnings-text" class="feedback-text"></span>
+              </div>
+            </div>
+
+            <!-- Telemetry Metrics Bar -->
+            <div id="query-telemetry-bar" class="telemetry-bar hidden">
+              <div class="telemetry-item">
+                <span class="telemetry-label">Duration:</span>
+                <span id="telemetry-duration" class="telemetry-val">-</span>
+              </div>
+              <div class="telemetry-item">
+                <span class="telemetry-label">Rows:</span>
+                <span id="telemetry-rows" class="telemetry-val">-</span>
+              </div>
+              <div class="telemetry-item">
+                <span class="telemetry-label">Segments Read / Pruned:</span>
+                <span id="telemetry-segments" class="telemetry-val">-</span>
+              </div>
+              <div class="telemetry-item">
+                <span class="telemetry-label">Bytes Scanned:</span>
+                <span id="telemetry-bytes" class="telemetry-val">-</span>
+              </div>
+            </div>
+
+            <!-- Query Output Area -->
+            <div class="query-results-area">
+              <div id="explain-output" class="explain-output font-mono hidden"></div>
+              <div class="table-wrapper">
+                <table id="query-results-grid" class="spreadsheet-grid">
+                  <thead id="query-results-head">
+                    <tr><th class="cell-empty">Query results will appear here</th></tr>
+                  </thead>
+                  <tbody id="query-results-body">
+                    <tr><td class="cell-empty">Enter a query and click Execute.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Tab 3: Schema Inspector View -->
+        <section id="view-schema" class="tab-content">
+          <div class="schema-panel">
+            <div class="schema-header">
+              <h3 id="schema-table-name" class="schema-title">Table Schema</h3>
+              <div class="schema-metadata-tags">
+                <span id="schema-pk-tag" class="chip chip-dim">PK: None</span>
+                <span id="schema-partitions-tag" class="chip chip-dim">Partitions: -</span>
+                <span id="schema-version-tag" class="chip chip-dim">Version: 1</span>
+              </div>
+            </div>
+
+            <div class="table-wrapper">
+              <table class="spreadsheet-grid schema-grid">
+                <thead>
+                  <tr>
+                    <th>Column Name</th>
+                    <th>Physical Type</th>
+                    <th>Semantic Type</th>
+                    <th>Unit / Currency</th>
+                    <th>Default Aggregation</th>
+                    <th>Flags</th>
+                    <th>Description</th>
+                  </tr>
+                </thead>
+                <tbody id="schema-grid-body">
+                  <tr><td colspan="7" class="cell-empty">Select a table to inspect its schema.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <!-- Row Detail Drawer -->
+    <div id="row-drawer" class="drawer hidden">
+      <div class="drawer-header">
+        <h4 class="drawer-title">Row Details</h4>
+        <button id="btn-close-drawer" class="btn-icon" title="Close details">&times;</button>
+      </div>
+      <div class="drawer-content">
+        <div id="drawer-key-badge" class="drawer-key-box"></div>
+        <div id="drawer-fields" class="drawer-fields-list"></div>
+        <div class="drawer-json-section">
+          <span class="json-label">Raw JSON Record:</span>
+          <pre id="drawer-raw-json" class="json-pre font-mono"></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Auth Settings Modal -->
+    <div id="auth-modal" class="modal-overlay hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 class="modal-title">API & Authentication Settings</h3>
+          <button id="btn-close-auth-modal" class="btn-icon">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="input-api-key" class="form-label">API Key (Bearer Token):</label>
+            <input type="text" id="input-api-key" class="form-input font-mono" placeholder="Enter API key or leave empty for default">
+            <span class="form-hint">Used for the Authorization: Bearer &lt;key&gt; header.</span>
+          </div>
+          <div class="form-group">
+            <label for="input-tenant" class="form-label">Tenant ID:</label>
+            <input type="text" id="input-tenant" class="form-input font-mono" value="local">
+            <span class="form-hint">Multi-tenant namespace (default: local).</span>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-save-auth" class="btn btn-primary">Save & Reconnect</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/ui/app.js"></script>
+</body>
+</html>
