@@ -740,7 +740,7 @@ impl<'a> Parser<'a> {
             return Ok(Some(numeric[0].name.clone()));
         }
         Err(AdbError::bad_request(format!(
-            "which column should be {}med? {} has several candidates: {}",
+            "{}() of which column? {} has several candidates: {}; name one",
             func.as_str(),
             self.schema.name,
             numeric

@@ -358,7 +358,7 @@ tenant. Column-level authorization is not implemented.
 ## Verification
 
 ```bash
-cargo test --workspace          # 308 tests
+cargo test --workspace          # 310 tests
 cargo clippy --workspace --all-targets -- -D warnings
 examples/demo.sh                # the full agent story, end to end
 ```

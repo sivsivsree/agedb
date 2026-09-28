@@ -48,6 +48,9 @@ jobs:
       - name: End-to-end demo
         run: examples/demo.sh
 
+      - name: Query guide examples
+        run: examples/query-guide.sh
+
   msrv:
     name: minimum supported rust version
     runs-on: ubuntu-latest

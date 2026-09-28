@@ -351,6 +351,32 @@ fn a_ranking_question_is_answered_from_semantic_metadata() {
 }
 
 #[test]
+fn an_ambiguous_measure_names_the_function_and_the_candidates() {
+    // Two numeric measures, neither declared as the default and neither
+    // money: "average" alone has no obvious column.
+    let tickets = Arc::new(TableSchema::new(
+        TableName::new("tickets").unwrap(),
+        vec![
+            ColumnSchema::new("id", DataType::Int64)
+                .required()
+                .semantic(SemanticType::Id),
+            ColumnSchema::new("reopens", DataType::Int64),
+            ColumnSchema::new("wait_minutes", DataType::Float64),
+        ],
+    ));
+    let context = TranslationContext::new(vec![tickets]);
+    let err = RuleTranslator::new()
+        .translate("average for tickets", &context)
+        .unwrap_err();
+    let message = err.to_string();
+    assert!(message.contains("avg() of which column?"), "{message}");
+    assert!(
+        message.contains("reopens") && message.contains("wait_minutes"),
+        "{message}"
+    );
+}
+
+#[test]
 fn requests_that_need_a_join_are_refused_clearly() {
     let err = translate("count orders joined with customers").unwrap_err();
     assert_eq!(err.code(), "unsupported");

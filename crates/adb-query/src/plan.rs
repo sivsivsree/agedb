@@ -242,16 +242,44 @@ impl PlanRequest {
     /// column type. That keeps a single place responsible for type decisions.
     pub fn to_ir(&self) -> Result<Query> {
         let table = TableName::new(self.table.clone())?;
+        let predicate = self.predicate()?;
         let mut query = match (&self.columns, self.operation) {
             (Some(columns), Operation::Select) if !columns.is_empty() => {
-                Query::scan_columns(table, columns.clone())
+                // Filtering on a column the caller does not want back is
+                // ordinary ("open tickets, showing id and priority"), so read
+                // the filtered columns as well and project them away after
+                // the filter.
+                let mut scanned = columns.clone();
+                if let Some(predicate) = &predicate {
+                    for name in predicate.referenced_columns() {
+                        if !scanned.contains(&name) {
+                            scanned.push(name);
+                        }
+                    }
+                }
+                let widened = scanned.len() > columns.len();
+                let mut query = Query::scan_columns(table, scanned);
+                if let Some(predicate) = predicate {
+                    query = query.filter(predicate);
+                }
+                if widened {
+                    query = query.project(
+                        columns
+                            .iter()
+                            .map(|name| (Expr::col(name), name.clone()))
+                            .collect(),
+                    );
+                }
+                query
             }
-            _ => Query::scan(table),
+            _ => {
+                let mut query = Query::scan(table);
+                if let Some(predicate) = predicate {
+                    query = query.filter(predicate);
+                }
+                query
+            }
         };
-
-        if let Some(predicate) = self.predicate()? {
-            query = query.filter(predicate);
-        }
 
         match self.operation {
             Operation::Aggregate => {

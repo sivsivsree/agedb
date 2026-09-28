@@ -344,7 +344,15 @@ pub fn definitions() -> Vec<ToolDefinition> {
                 "database": database_property(),
                 "request": {
                     "type": "string",
-                    "description": "The question in plain language, e.g. 'total revenue by country in the last 30 days'."
+                    "description": "The question in plain language, parsed by rules rather than a model. \
+                                    Name the table unless the database has one. Use one metric with its \
+                                    column ('total gross amount', 'average score', 'how many'). Group \
+                                    with 'by <column>'. Write filters column first: '<column> is <value>', \
+                                    '<column> greater than 100', '<column> is null'. Time: 'last 30 days', \
+                                    'this month', 'since 2026-01-01'. Check `interpretation` in the \
+                                    answer. For OR, lists, ranges, several metrics, true/false or \
+                                    multi-word values, send `plan` instead. \
+                                    Example: 'total gross amount by country in orders last month'."
                 },
                 "plan": PlanRequest::json_schema(),
                 "limit": {

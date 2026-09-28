@@ -362,6 +362,32 @@ fn sensitive_columns_are_hidden_unless_named() {
 }
 
 #[test]
+fn a_plan_can_filter_on_columns_it_does_not_return() {
+    let dir = TempDir::new().unwrap();
+    let engine = seeded(&dir, 30);
+    let ctx = ctx();
+
+    let mut plan = PlanRequest::select("leads")
+        .with_filter(FilterSpec::new("country", FilterOp::Eq, json!("uae")))
+        .with_filter(FilterSpec::unary("email", FilterOp::IsNotNull));
+    plan.columns = Some(vec!["id".to_string(), "value".to_string()]);
+    plan.order_by = vec![OrderSpec::desc("value")];
+    plan.limit = Some(3);
+    let outcome = engine.query(&ctx, QuerySource::Plan(plan)).unwrap();
+
+    // Only the requested columns come back, filtered on the others.
+    assert_eq!(outcome.schema.names(), vec!["id", "value"]);
+    let ids: Vec<i64> = outcome
+        .rows
+        .iter()
+        .map(|row| row["id"].as_i64().unwrap())
+        .collect();
+    assert_eq!(ids, vec![27, 24, 21], "every third row is uae");
+    assert!(outcome.rows.iter().all(|row| row.get("country").is_none()));
+    assert!(outcome.rows.iter().all(|row| row.get("email").is_none()));
+}
+
+#[test]
 fn ddl_is_validated_before_it_is_logged() {
     let dir = TempDir::new().unwrap();
     let engine = seeded(&dir, 1);

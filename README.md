@@ -30,7 +30,7 @@ The last answer is the point. A system that answered from one table would return
 confident, incomplete number. AgeDB refuses, says why, and the agent can ask a narrower
 question.
 
-Status: v0.1, single node, 308 tests, written in Rust. AgeDB is a working name and may
+Status: v0.1, single node, 310 tests, written in Rust. AgeDB is a working name and may
 change.
 
 ## What it does, in plain words
@@ -42,8 +42,10 @@ change.
   totals, averages, rankings, filters and time windows such as "in the last 90 days".
 * **Shows its working.** Every answer comes back with the exact plan that ran, so the agent,
   or you, can check the question was read the way it was meant.
-* **Refuses rather than guesses.** It refuses any question it cannot answer in full, and
-  gives the reason. Nonsense such as adding up customer IDs is refused as meaningless.
+* **Refuses what it knows it can't do.** It refuses questions that need two tables, and
+  gives the reason. Nonsense such as adding up customer IDs is refused as meaningless. A
+  plain-language question can still be read more narrowly than you meant, which is why
+  every answer shows its working.
 * **Stays in bounds.** Each API key has its own permissions, its own row, byte and time
   budgets, and a tenant it cannot see past.
 
@@ -249,7 +251,8 @@ curl -sS -X POST localhost:8080/v1/databases/sales/query "${H[@]}" \
 ```
 
 The operator guide, including config files, scopes, limits and troubleshooting, is in
-[`docs/usage.md`](docs/usage.md).
+[`docs/usage.md`](docs/usage.md). How to ask questions, in plain language or as plans, is
+in [`docs/querying.md`](docs/querying.md).
 
 ## The agent interface
 
@@ -316,8 +319,17 @@ The plain-language layer handles:
 * null checks;
 * relative and absolute time windows.
 
-Anything else is refused with the available columns listed. That refusal is the cue for the
-calling agent to send a structured plan instead.
+It is a rule parser, not a model. A question it cannot parse is refused, with the
+available columns listed. Some phrasings are parsed but read more narrowly than meant. For
+example, "count of refunded orders" drops "refunded" and counts every order, while "count
+orders where status is refunded" counts only the refunded ones. Check `interpretation`,
+and send a structured plan when the reading is wrong.
+
+**[`docs/querying.md`](docs/querying.md) is the full guide.** It covers how to phrase
+questions, the exact phrases that are understood, and worked examples for sales, orders,
+support, product analytics and price research, including the questions that are misread
+and what to ask instead. [`examples/query-guide.sh`](examples/query-guide.sh) reproduces
+every example on a live server.
 
 ## Architecture
 
@@ -454,7 +466,7 @@ Every change must keep these green. CI runs all of them on each pull request:
 ```bash
 cargo fmt --all --check                                   # formatting
 cargo clippy --workspace --all-targets -- -D warnings     # no warnings, at all
-cargo test --workspace                                    # 308 tests, about 15 seconds
+cargo test --workspace                                    # 310 tests, about 15 seconds
 examples/demo.sh                                          # end-to-end smoke test
 ```
 

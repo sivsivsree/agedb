@@ -257,6 +257,10 @@ table as if that were the whole answer.
 A refusal is the cue to send a structured `plan` instead. The calling agent is usually a
 language model already, and a plan is the precise form of what it meant.
 
+Some phrasings are parsed but read more narrowly than meant, so check the
+`interpretation` in every answer. The phrasing guide, with the exact phrases understood
+and worked real-world examples, is [`querying.md`](querying.md).
+
 ## Stopping the server
 
 `SIGINT` (Ctrl-C) or `SIGTERM` (what Docker, Kubernetes and systemd send) starts a graceful
