@@ -31,7 +31,10 @@ where
     let listener = tokio::net::TcpListener::bind(&address)
         .await
         .map_err(|e| AdbError::storage(format!("cannot bind {address}: {e}")))?;
-    tracing::info!(%address, "HTTP listening");
+    tracing::info!(
+        %address,
+        "HTTP listening; web dashboard available at http://{address}/"
+    );
     let app = router(state.clone());
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {

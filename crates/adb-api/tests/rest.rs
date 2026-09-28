@@ -890,3 +890,51 @@ async fn tenants_are_isolated_across_keys() {
     assert_eq!(body["tables"].as_array().unwrap().len(), 0);
     let _ = DatabaseName::new("shared").unwrap();
 }
+
+#[tokio::test]
+async fn web_dashboard_assets_are_served() {
+    let api = Api::new();
+
+    // GET / serves the dashboard HTML without authentication.
+    let (status, body) = api.get("/", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let html = body.as_str().expect("body is html string");
+    assert!(html.contains("AgenticDB"));
+    assert!(html.contains("app-layout"));
+
+    // GET /ui and /ui/index.html also serve the HTML.
+    let (status, _) = api.get("/ui", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = api.get("/ui/index.html", None).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Static CSS is served.
+    let (status, body) = api.get("/ui/app.css", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let css = body.as_str().expect("body is css string");
+    assert!(css.contains("--bg-primary"));
+
+    // Static JS is served.
+    let (status, body) = api.get("/ui/app.js", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let js = body.as_str().expect("body is js string");
+    assert!(js.contains("AgenticDB Web Dashboard"));
+}
+
+#[tokio::test]
+async fn openapi_and_ai_plugin_endpoints_are_served() {
+    let api = Api::new();
+
+    // GET /openapi.json serves OpenAPI 3.1 specification.
+    let (status, body) = api.get("/openapi.json", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["openapi"], json!("3.1.0"));
+    assert!(body["paths"]["/v1/databases"].is_object());
+    assert!(body["paths"]["/v1/databases/{database}/query"].is_object());
+
+    // GET /.well-known/ai-plugin.json serves ChatGPT plugin manifest.
+    let (status, body) = api.get("/.well-known/ai-plugin.json", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["name_for_model"], json!("agedb"));
+    assert_eq!(body["schema_version"], json!("v1"));
+}

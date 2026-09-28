@@ -1,0 +1,18 @@
+{
+  "schema_version": "v1",
+  "name_for_human": "AgenticDB Local Database",
+  "name_for_model": "agedb",
+  "description_for_human": "Analytical columnar database with vectorized queries and semantic metadata.",
+  "description_for_model": "AgenticDB is an agent-native database. Use it to create tables, store structured data, and run analytical queries using natural language questions or structured JSON plans.",
+  "auth": {
+    "type": "user_http",
+    "authorization_type": "bearer"
+  },
+  "api": {
+    "type": "openapi",
+    "url": "http://127.0.0.1:8080/openapi.json"
+  },
+  "logo_url": "http://127.0.0.1:8080/ui/logo.png",
+  "contact_email": "support@agedb.local",
+  "legal_info_url": "https://github.com/sivsivsree/agedb"
+}

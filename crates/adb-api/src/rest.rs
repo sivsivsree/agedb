@@ -7,7 +7,8 @@ use adb_engine::{Engine, QuerySource};
 use adb_mcp::{AuthRegistry, McpServer};
 use adb_query::PlanRequest;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
+use axum::response::{Html, IntoResponse};
 use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use serde::Deserialize;
@@ -121,6 +122,13 @@ pub fn router(state: AppState) -> Router {
         .delete(mcp_http::delete)
         .options(mcp_http::options);
     Router::new()
+        .route("/", get(ui_index))
+        .route("/ui", get(ui_index))
+        .route("/ui/index.html", get(ui_index))
+        .route("/ui/app.css", get(ui_css))
+        .route("/ui/app.js", get(ui_js))
+        .route("/openapi.json", get(openapi_spec))
+        .route("/.well-known/ai-plugin.json", get(ai_plugin_manifest))
         .route("/healthz", get(healthz))
         .route("/v1/tools", get(list_tools))
         .route("/mcp", mcp.clone())
@@ -458,4 +466,45 @@ async fn call_tool(
     }
     let engine = state.engine.clone();
     blocking(move || adb_mcp::tools::call(&engine, &ctx, tool, &body)).await
+}
+
+// --- Web dashboard static assets -------------------------------------------
+
+const UI_INDEX: &str = include_str!("../web/index.html");
+const UI_CSS: &str = include_str!("../web/app.css");
+const UI_JS: &str = include_str!("../web/app.js");
+
+async fn ui_index() -> Html<&'static str> {
+    Html(UI_INDEX)
+}
+
+async fn ui_css() -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], UI_CSS)
+}
+
+async fn ui_js() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
+        UI_JS,
+    )
+}
+
+const OPENAPI_SPEC: &str = include_str!("../web/openapi.json");
+const AI_PLUGIN_MANIFEST: &str = include_str!("../web/ai-plugin.json");
+
+async fn openapi_spec() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+        OPENAPI_SPEC,
+    )
+}
+
+async fn ai_plugin_manifest() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+        AI_PLUGIN_MANIFEST,
+    )
 }
